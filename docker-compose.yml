@@ -19,8 +19,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    command: >
-      sh -c "ollama serve & sleep 5 && ollama pull mixtral:8x22b"
+
 
   qdrant:
     image: qdrant/qdrant:latest
