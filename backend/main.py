@@ -1,5 +1,4 @@
 from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
@@ -11,11 +10,12 @@ import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 import aiofiles
+import aioredis
 
 from langchain.chains import RetrievalQA
 from langchain_community.llms import Ollama
-from langchain.vectorstores import Qdrant
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Qdrant
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -93,8 +93,15 @@ app.add_middleware(
 # Configure rate limiting
 @app.on_event("startup")
 async def startup():
-    redis = await aioredis.from_url("redis://localhost", encoding="utf8", decode_responses=True)
-    await FastAPILimiter.init(redis)
+    try:
+        redis = await aioredis.from_url("redis://redis:6379", encoding="utf8", decode_responses=True)
+        await FastAPILimiter.init(redis)
+    except Exception as e:
+        logger.error(f"Failed to connect to Redis: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to initialize rate limiting"
+        )
 
 # --------- Role-based Access ---------
 async def get_role(x_role: str = Header(...)):
