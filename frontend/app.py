@@ -8,7 +8,7 @@ role = st.radio("Select your role", ["user", "admin"], index=0)
 
 # Entrée de la question
 query = st.text_input("Ask a question:")
-if st.button("Ask"):
+if st.button("Ask", key="ask_button"):
     try:
         resp = make_request("post", "http://backend:8000/ask", json={"query": query}, headers={"X-Role": role})
         if resp.status_code == 200:
@@ -23,7 +23,7 @@ if st.button("Ask"):
 
 # Admin section
 if role == "admin":
-    if st.button("Reindex documents"):
+    if st.button("Reindex documents", key="reindex_button"):
         try:
             resp = make_request("post", "http://backend:8000/admin/reindex", headers={"X-Role": "admin"}, timeout=5)
             if resp.status_code == 200:
@@ -36,7 +36,7 @@ if role == "admin":
             st.error(f"An unexpected error occurred: {str(e)}")
 
     # Liste des documents
-    if st.button("Show indexed documents"):
+    if st.button("Show indexed documents", key="documents_button"):
         try:
             resp = make_request("get", "http://backend:8000/documents", headers={"X-Role": "admin"}, timeout=5)
             docs = resp.json()["documents"]
