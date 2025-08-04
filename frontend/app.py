@@ -1,5 +1,16 @@
 import streamlit as st
 import requests
+from typing import Dict, Any
+
+def make_request(method: str, url: str, **kwargs) -> requests.Response:
+    """Make an HTTP request with error handling."""
+    try:
+        response = requests.request(method, url, **kwargs)
+        response.raise_for_status()
+        return response
+    except requests.exceptions.RequestException as e:
+        st.error(f"API request failed: {str(e)}")
+        raise
 
 # Initialize session state
 if 'messages' not in st.session_state:
