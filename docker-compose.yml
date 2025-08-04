@@ -3,8 +3,6 @@ version: "3.8"
 networks:
   rag-network:
     driver: bridge
-    driver_opts:
-      com.docker.network.bridge.name: rag-network
 
 services:
   qdrant:
@@ -16,9 +14,7 @@ services:
     ports:
       - "6333:6333"
     networks:
-      rag-network:
-        aliases:
-          - qdrant-service
+      - rag-network
 
   redis:
     image: redis:alpine
@@ -27,9 +23,7 @@ services:
     ports:
       - "6379:6379"
     networks:
-      rag-network:
-        aliases:
-          - redis-service
+      - rag-network
 
   backend:
     build: ./backend
@@ -48,9 +42,7 @@ services:
       - qdrant
       - redis
     networks:
-      rag-network:
-        aliases:
-          - backend-service
+      - rag-network
     deploy:
       resources:
         reservations:
@@ -58,8 +50,6 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    extra_hosts:
-      - "backend:127.0.0.1"
 
   frontend:
     build: ./frontend
@@ -70,11 +60,7 @@ services:
     depends_on:
       - backend
     networks:
-      rag-network:
-        aliases:
-          - frontend-service
-    extra_hosts:
-      - "backend:127.0.0.1"
+      - rag-network
 
 volumes:
   qdrant_data:
