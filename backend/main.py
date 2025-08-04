@@ -115,7 +115,7 @@ async def get_role(x_role: str = Header(...)):
 # --------- Initialize RAG chain ---------
 async def initialize_rag_chain():
     try:
-        embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-m3", model_kwargs={"device": "cuda"})
+        embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-m3")
         vectorstore = Qdrant(
             url=QDRANT_URL,
             collection_name=COLLECTION_NAME,
