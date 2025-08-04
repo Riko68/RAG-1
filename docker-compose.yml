@@ -62,7 +62,7 @@ services:
     networks:
       - rag-network
 
-  backend:
+  rag-backend:
     build: ./backend
     container_name: backend
     restart: unless-stopped
