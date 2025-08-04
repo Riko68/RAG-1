@@ -1,6 +1,10 @@
 import streamlit as st
 import requests
 
+# Initialize session state
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
+
 st.title("RAG Q&A Demo")
 
 # Sélection du rôle
