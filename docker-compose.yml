@@ -62,7 +62,7 @@ services:
     networks:
       - rag-network
 
-  rag-backend:
+  backend:
     build: ./backend
     container_name: backend
     restart: unless-stopped
@@ -95,7 +95,7 @@ services:
     ports:
       - "8501:8501"
     depends_on:
-      - rag-backend
+      - backend
     networks:
       - rag-network
 
