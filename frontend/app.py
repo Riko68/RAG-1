@@ -11,7 +11,7 @@ query = st.text_input("Ask a question:")
 if st.button("Ask"):
     # Requête POST avec body JSON et header X-Role
     resp = requests.post(
-        "http://rag-backend:8000/ask",
+        "http://backend:8000/ask",
         json={"query": query},
         headers={"X-Role": role}
     )
