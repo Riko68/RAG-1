@@ -121,8 +121,12 @@ async def initialize_rag_chain():
             model_kwargs={'device': 'cuda'},
             encode_kwargs={'device': 'cuda', 'batch_size': 32}
         )
-        # Remove protocol from QDRANT_URL if present
-        qdrant_url = QDRANT_URL.replace('http://', '').replace('https://', '')
+        # Ensure QDRANT_URL has proper scheme
+        if not QDRANT_URL.startswith('http://') and not QDRANT_URL.startswith('https://'):
+            qdrant_url = f'http://{QDRANT_URL}'
+        else:
+            qdrant_url = QDRANT_URL
+        
         vectorstore = Qdrant(
             client=QdrantClient(url=qdrant_url),
             collection_name=COLLECTION_NAME,
