@@ -95,7 +95,7 @@ services:
     ports:
       - "8501:8501"
     depends_on:
-      - backend
+      - rag-backend
     networks:
       - rag-network
 
