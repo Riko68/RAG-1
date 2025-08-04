@@ -15,7 +15,8 @@ from redis.asyncio import Redis
 from langchain.chains import RetrievalQA
 from langchain_community.llms import Ollama
 from langchain_qdrant import Qdrant
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from qdrant_client import QdrantClient
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -115,11 +116,15 @@ async def get_role(x_role: str = Header(...)):
 # --------- Initialize RAG chain ---------
 async def initialize_rag_chain():
     try:
-        embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-m3")
+        embeddings = HuggingFaceEmbeddings(
+            model_name="BAAI/bge-m3",
+            model_kwargs={'device': 'cuda'},
+            encode_kwargs={'device': 'cuda', 'batch_size': 32}
+        )
         vectorstore = Qdrant(
             client=QdrantClient(host=QDRANT_URL),
             collection_name=COLLECTION_NAME,
-            embeddings=embeddings,
+            embeddings=embeddings
         )
         llm = Ollama(base_url=OLLAMA_URL, model="mistral")
         rag_chain = RetrievalQA.from_chain_type(
