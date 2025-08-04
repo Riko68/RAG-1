@@ -1,67 +1,10 @@
-version: "3.8"
-
 networks:
   rag-network:
     driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: rag-network
 
 services:
-
-  redis:
-    image: redis:alpine
-    container_name: redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    networks:
-      - rag-network
-
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: unless-stopped
-    environment:
-      - OLLAMA_MODELS=/models
-    volumes:
-      - ollama_models:/models
-    ports:
-      - "11434:11434"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    networks:
-      - rag-network
-
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: qdrant
-    restart: unless-stopped
-    volumes:
-      - qdrant_data:/qdrant/storage
-    ports:
-      - "6333:6333"
-    networks:
-      - rag-network
-
-  embedding-worker:
-    build: ./embedding-worker
-    container_name: embedding-worker
-    restart: unless-stopped
-    environment:
-      - QDRANT_URL=http://qdrant:6333
-      - DOCS_PATH=/documents
-      - EMBEDDING_MODEL=BAAI/bge-m3
-    volumes:
-      - ./documents:/documents
-    depends_on:
-      - qdrant
-    networks:
-      - rag-network
-
   backend:
     build: ./backend
     container_name: backend
@@ -79,7 +22,9 @@ services:
       - qdrant
       - redis
     networks:
-      - rag-network
+      rag-network:
+        aliases:
+          - backend-service
     deploy:
       resources:
         reservations:
@@ -87,6 +32,8 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    extra_hosts:
+      - "backend:127.0.0.1"
 
   frontend:
     build: ./frontend
@@ -97,8 +44,8 @@ services:
     depends_on:
       - backend
     networks:
-      - rag-network
-
-volumes:
-  ollama_models:
-  qdrant_data:
+      rag-network:
+        aliases:
+          - frontend-service
+    extra_hosts:
+      - "backend:127.0.0.1"
