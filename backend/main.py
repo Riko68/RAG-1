@@ -143,7 +143,59 @@ async def startup_event():
 )
 async def health():
     """Check if the API is running and healthy."""
-    return {"status": "ok", "service": "RAG API"}
+    try:
+        # Check if RAG chain is initialized
+        if rag_chain is None:
+            return JSONResponse(
+                content={
+                    "status": "warning",
+                    "service": "RAG API",
+                    "message": "RAG chain not initialized"
+                },
+                status_code=200
+            )
+            
+        # Check Qdrant connection
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"{QDRANT_URL}/collections/{COLLECTION_NAME}")
+                if response.status_code != 200:
+                    return JSONResponse(
+                        content={
+                            "status": "warning",
+                            "service": "RAG API",
+                            "message": "Qdrant connection issue"
+                        },
+                        status_code=200
+                    )
+        except Exception as e:
+            return JSONResponse(
+                content={
+                    "status": "warning",
+                    "service": "RAG API",
+                    "message": f"Failed to connect to Qdrant: {str(e)}"
+                },
+                status_code=200
+            )
+            
+        return JSONResponse(
+            content={
+                "status": "ok",
+                "service": "RAG API",
+                "message": "All services healthy"
+            },
+            status_code=200
+        )
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return JSONResponse(
+            content={
+                "status": "error",
+                "service": "RAG API",
+                "message": "Health check failed"
+            },
+            status_code=500
+        )
 
 @app.post(
     "/admin/reindex",
