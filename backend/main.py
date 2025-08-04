@@ -94,7 +94,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     try:
-        redis = await aioredis.from_url("redis://redis:6379", encoding="utf8", decode_responses=True)
+        redis = AsyncRedis.from_url("redis://redis:6379", encoding="utf8", decode_responses=True)
         await FastAPILimiter.init(redis)
     except Exception as e:
         logger.error(f"Failed to connect to Redis: {e}")
