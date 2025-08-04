@@ -4,6 +4,7 @@ requests>=2.31.0
 httpx>=0.25.0
 qdrant-client>=1.6.0
 langchain-community>=0.1.0
+langchain-huggingface>=0.0.1
 huggingface-hub>=0.20.0
 pydantic>=2.5.0
 python-dotenv>=1.0.0
