@@ -1,5 +1,10 @@
 from fastapi import FastAPI, Depends, Header, HTTPException
 
+from pydantic import BaseModel
+
+class QueryRequest(BaseModel):
+    query: str
+
 app = FastAPI()
 
 def get_role(x_role: str = Header(...)):
