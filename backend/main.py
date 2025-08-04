@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
@@ -136,7 +136,7 @@ async def initialize_rag_chain():
             client.create_collection(
                 collection_name=COLLECTION_NAME,
                 vectors_config={
-                    "vector": {
+                    "vectors": {
                         "size": 768,  # Adjust based on your embedding model
                         "distance": "Cosine"
                     }
