@@ -116,6 +116,29 @@ async def get_role(x_role: str = Header(...)):
 # --------- Initialize RAG chain ---------
 async def initialize_rag_chain():
     try:
+        # Create Qdrant client
+        if not QDRANT_URL.startswith('http://') and not QDRANT_URL.startswith('https://'):
+            qdrant_url = f'http://{QDRANT_URL}'
+        else:
+            qdrant_url = QDRANT_URL
+        
+        client = QdrantClient(url=qdrant_url)
+        
+        # Create collection if it doesn't exist
+        try:
+            client.get_collection(COLLECTION_NAME)
+        except:
+            client.create_collection(
+                collection_name=COLLECTION_NAME,
+                vectors_config={
+                    "vector": {
+                        "size": 768,  # Adjust based on your embedding model
+                        "distance": "Cosine"
+                    }
+                }
+            )
+            logger.info(f"Created collection: {COLLECTION_NAME}")
+        
         embeddings = HuggingFaceEmbeddings(
             model_name="BAAI/bge-m3",
             model_kwargs={'device': 'cuda'},
@@ -128,7 +151,7 @@ async def initialize_rag_chain():
             qdrant_url = QDRANT_URL
         
         vectorstore = Qdrant(
-            client=QdrantClient(url=qdrant_url),
+            client=client,
             collection_name=COLLECTION_NAME,
             embeddings=embeddings
         )
