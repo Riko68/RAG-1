@@ -10,7 +10,7 @@ import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 import aiofiles
-import aioredis
+from redis.asyncio import Redis
 
 from langchain.chains import RetrievalQA
 from langchain_community.llms import Ollama
