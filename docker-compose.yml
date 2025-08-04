@@ -66,20 +66,27 @@ services:
     build: ./backend
     container_name: backend
     restart: unless-stopped
+    ports:
+      - "8000:8000"
     environment:
       - QDRANT_URL=http://qdrant:6333
       - OLLAMA_URL=http://ollama:11434
-      - DOCS_PATH=/documents
+      - COLLECTION_NAME=rag_collection
+      - DOCS_PATH=/app/documents
     volumes:
-      - ./documents:/documents
-    ports:
-      - "8000:8000"
+      - ./backend/documents:/app/documents
     depends_on:
       - qdrant
-      - ollama
       - redis
     networks:
       - rag-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   frontend:
     build: ./frontend
