@@ -79,9 +79,7 @@ services:
       - qdrant
       - redis
     networks:
-      rag-network:
-        aliases:
-          - backend-service
+      - rag-network
     deploy:
       resources:
         reservations:
@@ -99,11 +97,7 @@ services:
     depends_on:
       - backend
     networks:
-      rag-network:
-        aliases:
-          - frontend-service
-    environment:
-      - BACKEND_URL=http://backend-service:8000
+      - rag-network
 
 volumes:
   ollama_models:
