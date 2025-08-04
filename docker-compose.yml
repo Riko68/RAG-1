@@ -1,3 +1,5 @@
+version: "3.8"
+
 networks:
   rag-network:
     driver: bridge
@@ -5,6 +7,30 @@ networks:
       com.docker.network.bridge.name: rag-network
 
 services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+    networks:
+      rag-network:
+        aliases:
+          - qdrant-service
+
+  redis:
+    image: redis:alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      rag-network:
+        aliases:
+          - redis-service
+
   backend:
     build: ./backend
     container_name: backend
@@ -49,3 +75,7 @@ services:
           - frontend-service
     extra_hosts:
       - "backend:127.0.0.1"
+
+volumes:
+  qdrant_data:
+    driver: local
