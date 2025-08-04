@@ -1,5 +1,9 @@
 version: "3.8"
 
+networks:
+  rag-network:
+    driver: bridge
+
 services:
 
   ollama:
@@ -19,6 +23,8 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    networks:
+      - rag-network
 
 
   qdrant:
@@ -29,6 +35,8 @@ services:
       - qdrant_data:/qdrant/storage
     ports:
       - "6333:6333"
+    networks:
+      - rag-network
 
   embedding-worker:
     build: ./embedding-worker
@@ -42,10 +50,12 @@ services:
       - ./documents:/documents
     depends_on:
       - qdrant
+    networks:
+      - rag-network
 
   backend:
     build: ./backend
-    container_name: rag-backend
+    container_name: backend
     restart: unless-stopped
     environment:
       - QDRANT_URL=http://qdrant:6333
@@ -58,6 +68,8 @@ services:
     depends_on:
       - qdrant
       - ollama
+    networks:
+      - rag-network
 
   frontend:
     build: ./frontend
@@ -67,6 +79,8 @@ services:
       - "8501:8501"
     depends_on:
       - backend
+    networks:
+      - rag-network
 
 volumes:
   ollama_models:
