@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, JSONResponse
+from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
