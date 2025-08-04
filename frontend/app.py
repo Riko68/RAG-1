@@ -19,21 +19,45 @@ if st.button("Ask"):
         st.subheader("Answer:")
         st.write(resp.json()["answer"])
     else:
-        st.error(f"Error {resp.status_code}: {resp.text}")
+        if resp.status_code == 200:
+            st.subheader("Answer:")
+            st.write(resp.json()["answer"])
+        else:
+            st.error(f"Error {resp.status_code}: {resp.text}")
 
 # Section admin
 if role == "admin":
     if st.button("Trigger reindex"):
-        resp = requests.post("http://backend:8000/admin/reindex", headers={"X-Role": "admin"})
-        if resp.status_code == 200:
-            st.success("Reindex triggered.")
+        # Wait for backend to be ready
+        if not wait_for_backend():
+            st.error("Backend service not responding. Please try again later.")
+            st.stop()
+
+        try:
+            resp = requests.post("http://backend:8000/admin/reindex", headers={"X-Role": "admin"}, timeout=5)
+            resp.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error triggering reindex: {str(e)}")
         else:
-            st.error(f"Error {resp.status_code}: {resp.text}")
+            if resp.status_code == 200:
+                st.success("Reindex triggered.")
+            else:
+                st.error(f"Error {resp.status_code}: {resp.text}")
 
     # Liste des documents
     if st.button("Show indexed documents"):
-        resp = requests.get("http://backend:8000/documents", headers={"X-Role": "admin"})
-        if resp.status_code == 200:
+        # Wait for backend to be ready
+        if not wait_for_backend():
+            st.error("Backend service not responding. Please try again later.")
+            st.stop()
+
+        try:
+            resp = requests.get("http://backend:8000/documents", headers={"X-Role": "admin"}, timeout=5)
+            resp.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error fetching documents: {str(e)}")
+            docs = []
+        else:
             docs = resp.json()["documents"]
             st.subheader("Indexed Documents:")
             if docs:
@@ -41,5 +65,3 @@ if role == "admin":
                     st.markdown(f"- 📄 `{doc}`")
             else:
                 st.info("No documents found.")
-        else:
-            st.error(f"Error {resp.status_code}: {resp.text}")
