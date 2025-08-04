@@ -34,7 +34,7 @@ services:
     networks:
       - rag-network
     volumes:
-      - ollama_data:/root/.ollama
+      - /root/.ollama
     command: "--no-verify"
 
   backend:
@@ -82,4 +82,6 @@ services:
 
 volumes:
   qdrant_data:
+    driver: local
+  ollama_data:
     driver: local
