@@ -34,15 +34,15 @@ if role == "admin":
             st.stop()
 
         try:
-            resp = requests.post("http://backend:8000/admin/reindex", headers={"X-Role": "admin"}, timeout=5)
-            resp.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            st.error(f"Error triggering reindex: {str(e)}")
-        else:
+            resp = make_request("post", "http://backend:8000/admin/reindex", headers={"X-Role": "admin"}, timeout=5)
             if resp.status_code == 200:
                 st.success("Reindex triggered.")
             else:
                 st.error(f"Error {resp.status_code}: {resp.text}")
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error triggering reindex: {str(e)}")
+        except Exception as e:
+            st.error(f"An unexpected error occurred: {str(e)}")
 
     # Liste des documents
     if st.button("Show indexed documents"):
@@ -52,12 +52,7 @@ if role == "admin":
             st.stop()
 
         try:
-            resp = requests.get("http://backend:8000/documents", headers={"X-Role": "admin"}, timeout=5)
-            resp.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            st.error(f"Error fetching documents: {str(e)}")
-            docs = []
-        else:
+            resp = make_request("get", "http://backend:8000/documents", headers={"X-Role": "admin"}, timeout=5)
             docs = resp.json()["documents"]
             st.subheader("Indexed Documents:")
             if docs:
@@ -65,3 +60,7 @@ if role == "admin":
                     st.markdown(f"- 📄 `{doc}`")
             else:
                 st.info("No documents found.")
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error fetching documents: {str(e)}")
+        except Exception as e:
+            st.error(f"An unexpected error occurred: {str(e)}")
