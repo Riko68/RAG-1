@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import os
 from typing import Dict, Any
 
 def make_request(method: str, url: str, **kwargs) -> requests.Response:
