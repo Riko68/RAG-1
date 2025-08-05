@@ -15,11 +15,11 @@ services:
       - "6333:6333"
     networks:
       - rag-network
-healthcheck:
-  test: ["CMD", "ps", "aux"]
-  interval: 10s
-  timeout: 5s
-  retries: 5
+    healthcheck:
+      test: ["CMD", "ps", "aux"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:alpine
