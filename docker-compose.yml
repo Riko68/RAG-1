@@ -21,6 +21,17 @@ services:
       timeout: 5s
       retries: 5
 
+  embedding-worker:
+    build: ./embedding-worker
+    volumes:
+      - ./documents:/documents
+    environment:
+      - QDRANT_URL=qdrant:6333
+      - DOCS_PATH=/documents
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+
   redis:
     image: redis:alpine
     container_name: redis
