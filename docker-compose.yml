@@ -40,6 +40,9 @@ services:
       - rag-network
     volumes:
       - /root/.ollama
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
 
   backend:
     build: ./backend
