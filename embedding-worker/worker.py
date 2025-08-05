@@ -1,16 +1,68 @@
 import os
 import time
+import threading
+import uvicorn
+from typing import Optional
+from fastapi import FastAPI
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from pydantic import BaseModel
 
-QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
 DOCS_PATH = os.environ.get("DOCS_PATH", "/documents")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "BAAI/bge-m3")
+STATUS_PORT = int(os.environ.get("STATUS_PORT", "8001"))
 
+# Global state for status tracking
+is_indexing = False
+current_file = None
+total_files = 0
+processed_files = 0
+last_error = None
+
+# Initialize clients
 client = QdrantClient(url=QDRANT_URL)
 model = SentenceTransformer(EMBEDDING_MODEL)
+
+# FastAPI app for status endpoint
+app = FastAPI(title="Embedding Worker Status")
+
+class StatusResponse(BaseModel):
+    is_indexing: bool
+    current_file: Optional[str]
+    processed_files: int
+    total_files: int
+    last_error: Optional[str]
+    qdrant_status: str
+    model_name: str
+
+@app.get("/status")
+async def get_status():
+    """Get current status of the embedding worker"""
+    global is_indexing, current_file, processed_files, total_files, last_error
+    
+    try:
+        # Verify Qdrant connection
+        collections = client.get_collections()
+        qdrant_status = "connected"
+    except Exception as e:
+        qdrant_status = f"error: {str(e)}"
+    
+    return StatusResponse(
+        is_indexing=is_indexing,
+        current_file=current_file,
+        processed_files=processed_files,
+        total_files=total_files,
+        last_error=last_error,
+        qdrant_status=qdrant_status,
+        model_name=EMBEDDING_MODEL
+    )
+
+def run_status_server():
+    """Run the status server in a separate thread"""
+    uvicorn.run(app, host="0.0.0.0", port=STATUS_PORT)
 
 def chunk_text(text, chunk_size=500, overlap=100):
     # Simple word-based chunking
@@ -31,7 +83,12 @@ def get_file_id(filepath, chunk_idx):
     return int(hashlib.md5(unique_str.encode()).hexdigest()[:8], 16) % (10**8)
 
 def index_document(filepath):
+    global is_indexing, current_file, processed_files, last_error
+    
     try:
+        is_indexing = True
+        current_file = os.path.basename(filepath)
+        
         print(f"Indexing {filepath}...")
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             text = f.read()
@@ -66,11 +123,19 @@ def index_document(filepath):
             collection_name="docs",
             points=points
         )
+        
+        processed_files += 1
+        last_error = None
         print(f"Successfully indexed {len(points)} chunks from {filepath}")
         
     except Exception as e:
-        print(f"Error processing {filepath}: {str(e)}")
+        last_error = str(e)
+        print(f"Error processing {filepath}: {last_error}")
         raise
+        
+    finally:
+        is_indexing = False
+        current_file = None
 
 class DocumentHandler(FileSystemEventHandler):
     def on_created(self, event):
@@ -80,20 +145,35 @@ class DocumentHandler(FileSystemEventHandler):
             index_document(event.src_path)
 
 if __name__ == "__main__":
+    # Start the status server in a separate thread
+    status_thread = threading.Thread(target=run_status_server, daemon=True)
+    status_thread.start()
+    
     # On startup, index all existing docs
-    for fname in os.listdir(DOCS_PATH):
+    files = [f for f in os.listdir(DOCS_PATH) 
+             if os.path.isfile(os.path.join(DOCS_PATH, f)) 
+             and f.lower().endswith(('.txt', '.md'))]
+    
+    total_files = len(files)
+    processed_files = 0
+    
+    for fname in files:
         fpath = os.path.join(DOCS_PATH, fname)
-        if os.path.isfile(fpath) and fname.endswith(('.txt', '.md')):
+        if os.path.isfile(fpath):
             index_document(fpath)
+    
     # Watch for new files
     event_handler = DocumentHandler()
     observer = Observer()
     observer.schedule(event_handler, DOCS_PATH, recursive=True)
     observer.start()
     print(f"Watching {DOCS_PATH} for new documents...")
+    print(f"Status available at http://localhost:{STATUS_PORT}/status")
+    
     try:
         while True:
             time.sleep(60)
     except KeyboardInterrupt:
         observer.stop()
+        print("\nShutting down...")
     observer.join()
