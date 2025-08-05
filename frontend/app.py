@@ -3,6 +3,9 @@ import requests
 import os
 from typing import Dict, Any
 
+# Get backend URL from environment variable or use localhost as default
+BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:8000')
+
 def make_request(method: str, url: str, **kwargs) -> requests.Response:
     """Make an HTTP request with error handling."""
     try:
@@ -26,7 +29,7 @@ role = st.radio("Select your role", ["user", "admin"], index=0)
 query = st.text_input("Ask a question:")
 if st.button("Ask", key="ask_button"):
     try:
-        resp = make_request("post", "http://backend:8000/ask", json={"query": query}, headers={"X-Role": role})
+        resp = make_request("post", f"{BACKEND_URL}/ask", json={"query": query}, headers={"X-Role": role})
         if resp.status_code == 200:
             st.subheader("Answer:")
             st.write(resp.json()["answer"])
@@ -41,7 +44,7 @@ if st.button("Ask", key="ask_button"):
 if role == "admin":
     if st.button("Reindex documents", key="reindex_button"):
         try:
-            resp = make_request("post", "http://backend:8000/admin/reindex", headers={"X-Role": "admin"}, timeout=5)
+            resp = make_request("post", f"{BACKEND_URL}/admin/reindex", headers={"X-Role": "admin"}, timeout=5)
             if resp.status_code == 200:
                 st.success("Reindex triggered.")
             else:
