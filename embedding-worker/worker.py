@@ -83,7 +83,7 @@ def get_file_id(filepath, chunk_idx):
     return int(hashlib.md5(unique_str.encode()).hexdigest()[:8], 16) % (10**8)
 
 def index_document(filepath):
-    global is_indexing, current_file, processed_files, last_error
+    global is_indexing, current_file, processed_files, total_files, last_error
     
     try:
         is_indexing = True
@@ -94,6 +94,12 @@ def index_document(filepath):
             text = f.read()
         
         chunks = chunk_text(text)
+        
+        # Skip empty files
+        if not chunks:
+            print(f"Warning: No content found in {filepath}")
+            return
+            
         embeddings = model.encode(chunks)
         
         # Create points with proper integer IDs
@@ -108,30 +114,70 @@ def index_document(filepath):
             }
         } for i, (emb, chunk) in enumerate(zip(embeddings, chunks))]
         
-        # Create collection if it doesn't exist
+        # Get or create collection
+        from qdrant_client.models import Distance, VectorParams
+        
+        # Define collection name and vector size
+        collection_name = "docs"
+        vector_size = len(embeddings[0]) if embeddings else 1024
+        
+        # Try to create collection, ignoring if it already exists
         try:
-            client.get_collection("docs")
-        except Exception:
-            from qdrant_client.models import Distance, VectorParams
             client.create_collection(
-                collection_name="docs",
-                vectors_config=VectorParams(size=len(embeddings[0]), distance=Distance.COSINE)
+                collection_name=collection_name,
+                vectors_config=VectorParams(
+                    size=vector_size,
+                    distance=Distance.COSINE
+                )
             )
+            print(f"Created new collection '{collection_name}' with vector size {vector_size}")
+        except Exception as e:
+            if "already exists" in str(e).lower():
+                print(f"Collection '{collection_name}' already exists, using existing collection")
+            else:
+                print(f"Error creating collection: {str(e)}")
+                raise
         
         # Upload to Qdrant
-        client.upsert(
-            collection_name="docs",
-            points=points
-        )
-        
-        processed_files += 1
-        last_error = None
-        print(f"Successfully indexed {len(points)} chunks from {filepath}")
-        
+        try:
+            client.upsert(
+                collection_name="docs",
+                points=points,
+                wait=True  # Wait for the operation to complete
+            )
+            processed_files += 1
+            total_files = max(total_files, processed_files)
+            last_error = None
+            print(f"Successfully indexed {len(points)} chunks from {filepath}")
+            
+        except Exception as e:
+            if "not found" in str(e).lower():
+                # If collection was deleted between check and upsert, retry once
+                print("Collection not found, retrying...")
+                client.create_collection(
+                    collection_name="docs",
+                    vectors_config=VectorParams(
+                        size=len(embeddings[0]) if embeddings else 1024,
+                        distance=Distance.COSINE
+                    )
+                )
+                client.upsert(
+                    collection_name="docs",
+                    points=points,
+                    wait=True
+                )
+                processed_files += 1
+                total_files = max(total_files, processed_files)
+                last_error = None
+                print(f"Successfully indexed {len(points)} chunks from {filepath} (after retry)")
+            else:
+                raise
+                
     except Exception as e:
         last_error = str(e)
-        print(f"Error processing {filepath}: {last_error}")
-        raise
+        error_msg = f"Error processing {filepath}: {last_error}"
+        print(error_msg)
+        raise Exception(error_msg) from e
         
     finally:
         is_indexing = False
