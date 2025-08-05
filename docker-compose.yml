@@ -15,11 +15,11 @@ services:
       - "6333:6333"
     networks:
       - rag-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]  # or /readyz for readiness
-      interval: 10s
-      timeout: 5s
-      retries: 5
+healthcheck:
+  test: ["CMD", "nc", "-z", "localhost", "6333"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
 
   redis:
     image: redis:alpine
