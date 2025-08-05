@@ -26,7 +26,7 @@ services:
     volumes:
       - ./documents:/documents
     environment:
-      - QDRANT_URL=qdrant:6333
+      - QDRANT_URL=http://qdrant:6333
       - DOCS_PATH=/documents
     depends_on:
       - qdrant
