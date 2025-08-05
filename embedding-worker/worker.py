@@ -22,20 +22,55 @@ def chunk_text(text, chunk_size=500, overlap=100):
             chunks.append(chunk)
     return chunks
 
+def get_file_id(filepath, chunk_idx):
+    """Generate a consistent integer ID from file path and chunk index"""
+    import hashlib
+    # Create a unique string from filepath and chunk index
+    unique_str = f"{os.path.abspath(filepath)}_{chunk_idx}"
+    # Generate a hash and convert to integer (first 8 bytes)
+    return int(hashlib.md5(unique_str.encode()).hexdigest()[:8], 16) % (10**8)
+
 def index_document(filepath):
-    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-        text = f.read()
-    chunks = chunk_text(text)
-    embeddings = model.encode(chunks)
-    # Store in Qdrant, with file path metadata
-    points = [{"id": f"{os.path.basename(filepath)}_{i}",
-               "vector": emb.tolist(),
-               "payload": {"source": filepath, "chunk_id": i, "text": chunk}}
-              for i, (emb, chunk) in enumerate(zip(embeddings, chunks))]
-    client.upsert(
-        collection_name="docs",
-        points=points
-    )
+    try:
+        print(f"Indexing {filepath}...")
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+        
+        chunks = chunk_text(text)
+        embeddings = model.encode(chunks)
+        
+        # Create points with proper integer IDs
+        points = [{
+            "id": get_file_id(filepath, i),
+            "vector": emb.tolist(),
+            "payload": {
+                "source": os.path.basename(filepath),
+                "chunk_id": i,
+                "text": chunk,
+                "full_path": filepath
+            }
+        } for i, (emb, chunk) in enumerate(zip(embeddings, chunks))]
+        
+        # Create collection if it doesn't exist
+        try:
+            client.get_collection("docs")
+        except Exception:
+            from qdrant_client.models import Distance, VectorParams
+            client.create_collection(
+                collection_name="docs",
+                vectors_config=VectorParams(size=len(embeddings[0]), distance=Distance.COSINE)
+            )
+        
+        # Upload to Qdrant
+        client.upsert(
+            collection_name="docs",
+            points=points
+        )
+        print(f"Successfully indexed {len(points)} chunks from {filepath}")
+        
+    except Exception as e:
+        print(f"Error processing {filepath}: {str(e)}")
+        raise
 
 class DocumentHandler(FileSystemEventHandler):
     def on_created(self, event):
