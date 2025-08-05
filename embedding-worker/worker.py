@@ -95,12 +95,25 @@ def index_document(filepath):
         
         chunks = chunk_text(text)
         
-        # Skip empty files
+        # Skip empty files or files that couldn't be chunked
+        if not chunks or not any(chunks):
+            print(f"Warning: No valid content found in {filepath}")
+            return
+        
+        # Filter out any empty chunks that might cause issues
+        chunks = [chunk for chunk in chunks if chunk.strip()]
         if not chunks:
-            print(f"Warning: No content found in {filepath}")
+            print(f"Warning: No valid text chunks found in {filepath}")
             return
             
-        embeddings = model.encode(chunks)
+        try:
+            embeddings = model.encode(chunks)
+            if len(embeddings) == 0 or (hasattr(embeddings, 'shape') and embeddings.shape[0] == 0):
+                print(f"Warning: No embeddings generated for {filepath}")
+                return
+        except Exception as e:
+            print(f"Error generating embeddings for {filepath}: {str(e)}")
+            return
         
         # Create points with proper integer IDs
         points = [{
@@ -119,7 +132,12 @@ def index_document(filepath):
         
         # Define collection name and vector size
         collection_name = "docs"
-        vector_size = len(embeddings[0]) if embeddings else 1024
+        # Handle the case where embeddings might be a NumPy array
+        if len(embeddings) > 0 and len(embeddings[0]) > 0:
+            vector_size = len(embeddings[0])
+        else:
+            # Default vector size if no embeddings were generated
+            vector_size = 1024
         
         # Try to create collection, ignoring if it already exists
         try:
