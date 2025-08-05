@@ -67,22 +67,6 @@ if role == "admin":
         except Exception as e:
             st.error(f"An unexpected error occurred: {str(e)}")
 
-    # Liste des documents
-    if st.button("Show indexed documents"):
-        try:
-            resp = make_request("get", "http://backend:8000/documents", headers={"X-Role": "admin"}, timeout=5)
-            docs = resp.json()["documents"]
-            st.subheader("Indexed Documents:")
-            if docs:
-                for doc in docs:
-                    st.markdown(f"- 📄 `{doc}`")
-            else:
-                st.info("No documents found.")
-        except requests.exceptions.RequestException as e:
-            st.error(f"Error fetching documents: {str(e)}")
-        except Exception as e:
-            st.error(f"An unexpected error occurred: {str(e)}")
-
 # Display chat messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
