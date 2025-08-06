@@ -48,7 +48,7 @@ Path(DOCS_PATH).mkdir(parents=True, exist_ok=True)
 # --------- Models ---------
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4096, description="The question to ask the RAG system")
-    top_k: Optional[int] = Field(3, ge=1, le=10, description="Number of relevant chunks to retrieve")
+    top_k: Optional[int] = Field(3, ge=1, le=30, description="Number of relevant chunks to retrieve (max 30)")
     
     class Config:
         schema_extra = {
