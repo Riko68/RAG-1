@@ -24,54 +24,127 @@ DOCS_PATH = os.environ.get("DOCS_PATH", "/documents")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "BAAI/bge-m3")
 STATUS_PORT = int(os.environ.get("STATUS_PORT", "8001"))
 
-# Global state for status tracking
-is_indexing = False
-current_file = None
-total_files = 0
-processed_files = 0
-last_error = None
-
 # Initialize clients
 client = QdrantClient(url=QDRANT_URL)
 model = SentenceTransformer(EMBEDDING_MODEL)
 
 # FastAPI app for status endpoint
-app = FastAPI(title="Embedding Worker Status")
+app = FastAPI(
+    title="RAG Embedding Worker API",
+    description="API for document embedding and search",
+    version="1.0.0"
+)
 
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global state
+is_indexing = False
+current_file = None
+processed_files = 0
+total_files = 0
+last_error = None
+
+# Response Models
+class SearchResult(BaseModel):
+    rank: int
+    score: float
+    source: str
+    text: str
+    chunk_id: int
+    full_path: str
+
+class SearchResponse(BaseModel):
+    query: str
+    results: List[SearchResult]
+    total_results: int
+        
 class StatusResponse(BaseModel):
-    is_indexing: bool
+    status: str
     current_file: Optional[str]
     processed_files: int
     total_files: int
     last_error: Optional[str]
+    timestamp: int
     qdrant_status: str
     model_name: str
 
-@app.get("/status")
+@app.get("/status", response_model=StatusResponse, summary="Get current indexing status")
 async def get_status():
-    """Get current status of the embedding worker"""
+    """Get the current status of the embedding worker"""
     global is_indexing, current_file, processed_files, total_files, last_error
     
     try:
-        # Verify Qdrant connection
-        collections = client.get_collections()
+        # Check Qdrant connection
+        client.get_collections()
         qdrant_status = "connected"
     except Exception as e:
         qdrant_status = f"error: {str(e)}"
     
-    return StatusResponse(
-        is_indexing=is_indexing,
-        current_file=current_file,
-        processed_files=processed_files,
-        total_files=total_files,
-        last_error=last_error,
-        qdrant_status=qdrant_status,
-        model_name=EMBEDDING_MODEL
-    )
+    return {
+        "status": "indexing" if is_indexing else "idle",
+        "current_file": current_file,
+        "processed_files": processed_files,
+        "total_files": total_files,
+        "last_error": last_error,
+        "timestamp": int(time.time()),
+        "qdrant_status": qdrant_status,
+        "model_name": EMBEDDING_MODEL
+    }
+
+@app.get("/search", response_model=SearchResponse, summary="Search documents")
+async def search_documents(
+    q: str = Query(..., description="Search query"),
+    limit: int = Query(5, description="Maximum number of results to return", ge=1, le=20)
+):
+    """Search for documents matching the query"""
+    try:
+        results = query_embeddings(q, limit=limit)
+        return {
+            "query": q,
+            "results": results,
+            "total_results": len(results)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/index", status_code=202, summary="Index a document from URL")
+async def index_document_url(url: str):
+    """Trigger indexing of a document from a URL"""
+    try:
+        # In a real implementation, you would download the file from the URL
+        # For now, we'll just print a message
+        print(f"Received request to index document from URL: {url}")
+        return {"status": "accepted", "url": url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Add a simple root endpoint with API documentation link
+@app.get("/")
+async def root():
+    return {
+        "message": "RAG Embedding Worker API",
+        "docs": "/docs",
+        "status": "/status",
+        "search": "/search?q=your+query"
+    }
 
 def run_status_server():
     """Run the status server in a separate thread"""
-    uvicorn.run(app, host="0.0.0.0", port=STATUS_PORT)
+    config = uvicorn.Config(
+        app,
+        host="0.0.0.0",
+        port=STATUS_PORT,
+        log_level="info"
+    )
+    server = uvicorn.Server(config)
+    server.run()
 
 def chunk_text(text, chunk_size=500, overlap=100):
     # Simple word-based chunking
