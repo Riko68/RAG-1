@@ -267,9 +267,6 @@ def index_document(filepath):
         
         # This point should never be reached due to the return on success
         raise Exception("Unexpected error: Reached end of function without completing or raising an error")
-            except Exception as e3:
-                print(f"Error upserting points to Qdrant (after retry): {str(e3)}")
-                raise
                 
     except Exception as e:
         last_error = str(e)
