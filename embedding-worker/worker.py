@@ -82,6 +82,46 @@ def get_file_id(filepath, chunk_idx):
     # Generate a hash and convert to integer (first 8 bytes)
     return int(hashlib.md5(unique_str.encode()).hexdigest()[:8], 16) % (10**8)
 
+def ensure_collection_exists(collection_name, vector_size=1024):
+    """Ensure the Qdrant collection exists with proper configuration"""
+    from qdrant_client.models import Distance, VectorParams
+    
+    try:
+        # Check if collection exists
+        collections = client.get_collections().collections
+        collection_names = [c.name for c in collections]
+        
+        if collection_name not in collection_names:
+            print(f"Creating new collection: {collection_name}")
+            
+            # Create collection with optimized settings
+            client.create_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(
+                    size=vector_size,
+                    distance=Distance.COSINE
+                ),
+                optimizers_config={
+                    'indexing_threshold': 0,  # Index all vectors
+                    'memmap_threshold': 20000,
+                    'default_segment_number': 1,
+                    'max_optimization_threads': 4
+                },
+                hnsw_config={
+                    'm': 16,
+                    'ef_construct': 100,
+                    'full_scan_threshold': 10,
+                    'on_disk': False
+                }
+            )
+            print(f"Successfully created collection: {collection_name}")
+        else:
+            print(f"Using existing collection: {collection_name}")
+            
+    except Exception as e:
+        print(f"Error managing collection: {str(e)}")
+        raise
+
 def index_document(filepath):
     global is_indexing, current_file, processed_files, total_files, last_error
     
@@ -115,89 +155,55 @@ def index_document(filepath):
             print(f"Error generating embeddings for {filepath}: {str(e)}")
             return
         
+        # Get vector size from the first embedding
+        vector_size = len(embeddings[0]) if len(embeddings) > 0 else 1024
+        
+        # Ensure collection exists with correct configuration
+        collection_name = "rag_collection"
+        ensure_collection_exists(collection_name, vector_size)
+        
         # Create points for Qdrant
         points = []
         for i, (emb, chunk) in enumerate(zip(embeddings, chunks)):
             point = {
                 "id": get_file_id(filepath, i),
-                "vector": emb.tolist(),  # Using default vector name
+                "vector": emb.tolist(),
                 "payload": {
                     "source": os.path.basename(filepath),
                     "chunk_id": i,
                     "text": chunk,
-                    "full_path": filepath
+                    "full_path": filepath,
+                    "timestamp": int(time.time())
                 }
             }
             points.append(point)
             print(f"Created point {i+1}/{len(chunks)} with vector size {len(emb)}")
         
-        # Get or create collection
-        from qdrant_client.models import Distance, VectorParams
-        
-        # Define collection name and vector size
-        collection_name = "rag_collection"  # Must match the collection name in the RAG service
-        # Handle the case where embeddings might be a NumPy array
-        if len(embeddings) > 0 and len(embeddings[0]) > 0:
-            vector_size = len(embeddings[0])
-        else:
-            # Default vector size if no embeddings were generated
-            vector_size = 1024
-        
-        # Check if collection exists, create if it doesn't
-        collections = client.get_collections().collections
-        collection_names = [c.name for c in collections]
-        
-        if collection_name not in collection_names:
+        # Upsert points in batches
+        batch_size = 100
+        for i in range(0, len(points), batch_size):
+            batch = points[i:i + batch_size]
             try:
-                print(f"Creating new collection: {collection_name}")
-                # Create collection with optimized indexing settings
-                from qdrant_client.http.models import HnswConfigDiff, OptimizersConfigDiff
-                
-                # First, delete the collection if it exists
-                try:
-                    client.delete_collection(collection_name)
-                    print(f"Deleted existing collection: {collection_name}")
-                except Exception as e:
-                    print(f"No existing collection to delete: {str(e)}")
-                
-                # Create collection with minimal settings first
-                client.create_collection(
+                operation_info = client.upsert(
                     collection_name=collection_name,
-                    vectors_config=VectorParams(
-                        size=vector_size,
-                        distance=Distance.COSINE
-                    )
+                    points=batch,
+                    wait=True
                 )
-                
-                # Then update with our optimized settings
-                client.update_collection(
-                    collection_name=collection_name,
-                    optimizers_config={
-                        'indexing_threshold': 0,  # Index all vectors
-                        'memmap_threshold': 20000,
-                        'default_segment_number': 1,
-                        'max_optimization_threads': 4
-                    },
-                    hnsw_config={
-                        'm': 16,
-                        'ef_construct': 100,
-                        'full_scan_threshold': 10,
-                        'on_disk': False
-                    }
-                )
-                
-                # Force immediate optimization
-                client.update_collection(
-                    collection_name=collection_name,
-                    optimizer_config={
-                        'indexing_threshold': 0
-                    }
-                )
-                print(f"Successfully created collection: {collection_name}")
+                print(f"Upserted batch {i//batch_size + 1}/{(len(points)-1)//batch_size + 1} with {len(batch)} points")
             except Exception as e:
-                print(f"Warning: Could not create collection (it might already exist): {str(e)}")
-        else:
-            print(f"Using existing collection: {collection_name}")
+                print(f"Error upserting batch: {str(e)}")
+                # Try to continue with next batch even if one fails
+                continue
+                
+        print(f"✅ Successfully indexed {len(points)} points from {os.path.basename(filepath)}")
+        processed_files += 1
+        
+    except Exception as e:
+        last_error = str(e)
+        print(f"Error indexing {filepath}: {str(e)}")
+    finally:
+        is_indexing = False
+        current_file = None
         
         # Upload points to Qdrant with retries
         max_retries = 3
