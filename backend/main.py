@@ -324,9 +324,14 @@ async def query_endpoint(
          -d '{"query": "Your question here"}'
     """
     try:
+        # Get query text, supporting both 'question' and 'query' fields for backward compatibility
+        query_text = request.get("query", "") or request.get("question", "")
+        if not query_text:
+            raise ValueError("Missing required field 'query' or 'question' in request body")
+            
         # Convert to QueryRequest
         query_request = QueryRequest(
-            query=request.get("query", ""),
+            query=query_text,
             top_k=request.get("top_k", 3)
         )
         
