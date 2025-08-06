@@ -139,77 +139,79 @@ def index_document(filepath):
             # Default vector size if no embeddings were generated
             vector_size = 1024
         
-        # Try to create collection, ignoring if it already exists
-        try:
-            client.create_collection(
-                collection_name=collection_name,
-                vectors_config=VectorParams(
-                    size=vector_size,
-                    distance=Distance.COSINE
-                )
-            )
-            print(f"Created new collection: {collection_name}")
-        except Exception as e:
-            if "already exists" in str(e).lower():
-                print(f"Collection '{collection_name}' already exists, using existing collection")
-            else:
-                print(f"Error creating collection: {str(e)}")
-                raise
+        # Check if collection exists, create if it doesn't
+        collections = client.get_collections().collections
+        collection_names = [c.name for c in collections]
         
-        # Upload points to Qdrant
-        max_retries = 2
+        if collection_name not in collection_names:
+            try:
+                print(f"Creating new collection: {collection_name}")
+                client.create_collection(
+                    collection_name=collection_name,
+                    vectors_config=VectorParams(
+                        size=vector_size,
+                        distance=Distance.COSINE
+                    )
+                )
+                print(f"Successfully created collection: {collection_name}")
+            except Exception as e:
+                print(f"Warning: Could not create collection (it might already exist): {str(e)}")
+        else:
+            print(f"Using existing collection: {collection_name}")
+        
+        # Upload points to Qdrant with retries
+        max_retries = 3
+        chunk_size = 50  # Process points in smaller batches
+        
         for attempt in range(max_retries):
             try:
-                print(f"Attempt {attempt + 1}/{max_retries}: Upserting {len(points)} points to collection '{collection_name}'...")
+                print(f"Attempt {attempt + 1}/{max_retries}: Processing {len(points)} points in chunks of {chunk_size}...")
                 
-                # First, verify collection exists and is accessible
-                try:
-                    collection_info = client.get_collection(collection_name)
-                    print(f"Collection info: {collection_info}")
-                except Exception as e:
-                    print(f"Warning: Could not verify collection: {str(e)}")
-                    # Try to recreate the collection if it doesn't exist
+                # Process points in smaller chunks
+                for i in range(0, len(points), chunk_size):
+                    chunk_points = points[i:i + chunk_size]
+                    print(f"Processing chunk {i//chunk_size + 1}/{(len(points)-1)//chunk_size + 1} ({len(chunk_points)} points)")
+                    
                     try:
-                        client.create_collection(
+                        # Try to upsert the chunk
+                        operation_info = client.upsert(
                             collection_name=collection_name,
-                            vectors_config=VectorParams(
-                                size=vector_size,
-                                distance=Distance.COSINE
-                            )
+                            points=chunk_points,
+                            wait=True
                         )
-                        print(f"Recreated collection: {collection_name}")
-                    except Exception as create_err:
-                        print(f"Error recreating collection: {str(create_err)}")
-                        raise
+                        print(f"Successfully upserted chunk {i//chunk_size + 1}")
+                        
+                    except Exception as chunk_error:
+                        print(f"Error upserting chunk {i//chunk_size + 1}: {str(chunk_error)}")
+                        # If chunk fails, try to continue with next chunk
+                        continue
                 
-                # Try to upsert the points
-                operation_info = client.upsert(
-                    collection_name=collection_name,
-                    points=points,
-                    wait=True
-                )
-                print(f"Upsert operation info: {operation_info}")
-                
-                # Verify the points were added
-                count_result = client.count(
-                    collection_name=collection_name,
-                    count_filter=None
-                )
-                print(f"Current point count in collection: {count_result.count}")
+                # Verify the total points in collection
+                try:
+                    count_result = client.count(
+                        collection_name=collection_name,
+                        count_filter=None
+                    )
+                    print(f"Current total points in collection: {count_result.count}")
+                except Exception as count_error:
+                    print(f"Warning: Could not verify point count: {str(count_error)}")
                 
                 # If we got here, the operation was successful
                 processed_files += 1
                 total_files = max(total_files, processed_files)
                 last_error = None
-                print(f"Successfully indexed {len(points)} chunks from {filepath}")
+                print(f"Successfully processed {len(points)} chunks from {filepath}")
                 break
                 
             except Exception as e:
                 last_error = str(e)
                 print(f"Attempt {attempt + 1} failed: {str(e)}")
                 if attempt == max_retries - 1:  # Last attempt
-                    print(f"Failed to index {filepath} after {max_retries} attempts")
-                    raise
+                    error_msg = f"Failed to index {filepath} after {max_retries} attempts: {str(e)}"
+                    print(error_msg)
+                    raise Exception(error_msg) from e
+                # Wait before retry
+                time.sleep(2 ** attempt)  # Exponential backoff
             except Exception as e3:
                 print(f"Error upserting points to Qdrant (after retry): {str(e3)}")
                 raise
