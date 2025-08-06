@@ -1,10 +1,10 @@
-from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
-from pydantic import BaseModel, Field
-from typing import List, Optional
+from pydantic import BaseModel, Field, HttpUrl
+from typing import List, Optional, Dict, Any
 import os
 import logging
 import asyncio
@@ -18,6 +18,9 @@ from langchain_community.llms import Ollama
 from langchain_qdrant import Qdrant
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient
+
+# Import RAG service
+from rag_service import RAGService
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -44,11 +47,25 @@ Path(DOCS_PATH).mkdir(parents=True, exist_ok=True)
 # --------- Models ---------
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4096, description="The question to ask the RAG system")
+    top_k: Optional[int] = Field(3, ge=1, le=10, description="Number of relevant chunks to retrieve")
     
     class Config:
         schema_extra = {
             "example": {
-                "query": "What is the capital of France?"
+                "query": "What is the capital of France?",
+                "top_k": 3
+            }
+        }
+
+class RAGResponse(BaseModel):
+    answer: str = Field(..., description="The generated answer")
+    sources: List[str] = Field(..., description="List of source documents used for the answer")
+    
+    class Config:
+        schema_extra = {
+            "example": {
+                "answer": "The capital of France is Paris.",
+                "sources": ["document1.txt", "document2.pdf"]
             }
         }
 
@@ -97,18 +114,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure rate limiting
+# Initialize services
+rag_service = None
+
+# Initialize RAG chain on startup
 @app.on_event("startup")
-async def startup():
+async def startup_event():
+    global rag_service
+    
+    # Initialize rate limiter
+    redis = Redis.from_url("redis://redis:6379/0")
+    await FastAPILimiter.init(redis)
+    logger.info("Rate limiter initialized")
+    
+    # Initialize RAG service
     try:
-        redis = Redis.from_url("redis://redis:6379", encoding="utf8", decode_responses=True)
-        await FastAPILimiter.init(redis)
-    except Exception as e:
-        logger.error(f"Failed to connect to Redis: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to initialize rate limiting"
+        rag_service = RAGService(
+            qdrant_url=QDRANT_URL,
+            ollama_url=OLLAMA_URL,
+            collection_name=COLLECTION_NAME
         )
+        logger.info("RAG service initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize RAG service: {str(e)}")
+        raise
 
 # --------- Role-based Access ---------
 async def get_role(x_role: str = Header(...)):
@@ -118,69 +147,6 @@ async def get_role(x_role: str = Header(...)):
             detail="Invalid role. Must be either 'admin' or 'user'"
         )
     return x_role
-
-# --------- Initialize RAG chain ---------
-async def initialize_rag_chain():
-    try:
-        # Create Qdrant client
-        if not QDRANT_URL.startswith('http://') and not QDRANT_URL.startswith('https://'):
-            qdrant_url = f'http://{QDRANT_URL}'
-        else:
-            qdrant_url = QDRANT_URL
-        
-        client = QdrantClient(url=qdrant_url)
-        
-        # Create collection if it doesn't exist
-        try:
-            client.get_collection(COLLECTION_NAME)
-        except:
-            client.create_collection(
-                collection_name=COLLECTION_NAME,
-                vectors_config={
-                    "vectors": {
-                        "size": 768,  # Adjust based on your embedding model
-                        "distance": "Cosine"
-                    }
-                }
-            )
-            logger.info(f"Created collection: {COLLECTION_NAME}")
-        
-        embeddings = HuggingFaceEmbeddings(
-            model_name="BAAI/bge-m3",
-            model_kwargs={'device': 'cuda'},
-            encode_kwargs={'device': 'cuda', 'batch_size': 32}
-        )
-        # Ensure QDRANT_URL has proper scheme
-        if not QDRANT_URL.startswith('http://') and not QDRANT_URL.startswith('https://'):
-            qdrant_url = f'http://{QDRANT_URL}'
-        else:
-            qdrant_url = QDRANT_URL
-        
-        vectorstore = Qdrant(
-            client=client,
-            collection_name=COLLECTION_NAME,
-            embeddings=embeddings
-        )
-        llm = Ollama(base_url=OLLAMA_URL, model="mistral")
-        rag_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            retriever=vectorstore.as_retriever(),
-            chain_type="stuff"
-        )
-        logger.info("RAG chain initialized successfully.")
-        return rag_chain
-    except Exception as e:
-        logger.error(f"Failed to initialize RAG chain: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to initialize RAG system"
-        )
-
-# Initialize RAG chain on startup
-@app.on_event("startup")
-async def startup_event():
-    global rag_chain
-    rag_chain = await initialize_rag_chain()
 
 # --------- Endpoints ---------
 @app.get(
@@ -192,12 +158,12 @@ async def health():
     """Check if the API is running and healthy."""
     try:
         # Check if RAG chain is initialized
-        if rag_chain is None:
+        if rag_service is None:
             return JSONResponse(
                 content={
                     "status": "warning",
                     "service": "RAG API",
-                    "message": "RAG chain not initialized"
+                    "message": "RAG service not initialized"
                 },
                 status_code=200
             )
@@ -295,27 +261,49 @@ async def list_documents():
             detail="Failed to list documents"
         )
 
-@app.post(
-    "/ask",
-    response_model=QueryRequest,
-    summary="Ask a question using RAG",
-    tags=["query"],
-    dependencies=[Depends(RateLimiter(times=5, seconds=60))]
-)
-async def query_endpoint(query: QueryRequest, role: str = Depends(get_role)):
-    """Ask a question using the RAG system. Requires a valid X-Role header."""
-    try:
-        if rag_chain is None:
-            raise HTTPException(
-                status_code=500,
-                detail="RAG pipeline not initialized"
-            )
-            
-        response = await asyncio.to_thread(rag_chain.run, query.query)
-        return {"answer": response}
-    except Exception as e:
-        logger.error(f"Error during query processing: {e}")
+@app.post("/ask", response_model=RAGResponse, status_code=status.HTTP_200_OK)
+async def ask_question(
+    query: QueryRequest,
+    role: str = Depends(get_role)
+):
+    """
+    Ask a question using the RAG system.
+    
+    This endpoint retrieves relevant context from the vector database and uses
+    Ollama to generate a response based on that context.
+    
+    - **query**: The question to ask
+    - **top_k**: Number of relevant chunks to retrieve (default: 3)
+    """
+    if not rag_service:
         raise HTTPException(
-            status_code=500,
-            detail="Failed to process query"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="RAG service is not initialized"
         )
+    
+    try:
+        logger.info(f"Processing question: {query.query}")
+        
+        # Get response from RAG service
+        response = await rag_service.ask(
+            query=query.query,
+            top_k=query.top_k
+        )
+        
+        logger.info(f"Successfully generated response for question: {query.query}")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in RAG pipeline: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred while processing your question: {str(e)}"
+        )
+
+# Keep the old query endpoint for backward compatibility
+@app.post("/query", response_model=RAGResponse)
+async def query_endpoint(query: QueryRequest, role: str = Depends(get_role)):
+    """
+    Legacy endpoint for backward compatibility.
+    """
+    return await ask_question(query, role)
