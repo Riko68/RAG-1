@@ -188,121 +188,77 @@ def index_document(filepath):
             points.append(point)
             print(f"Created point {i+1}/{len(chunks)} with vector size {len(emb)}")
         
-        # Upsert points in batches
-        batch_size = 100
-        for i in range(0, len(points), batch_size):
-            batch = points[i:i + batch_size]
+        # Upload points to Qdrant with retries
+        max_retries = 3
+        chunk_size = 100  # Increased from 10 to 100 for better performance
+        
+        print(f"Starting to process {len(points)} points in chunks of {chunk_size}")
+        print(f"Vector size: {vector_size}")
+        print(f"Collection name: {collection_name}")
+        
+        for attempt in range(max_retries):
             try:
-                operation_info = client.upsert(
-                    collection_name=collection_name,
-                    points=batch,
-                    wait=True
-                )
-                print(f"Upserted batch {i//batch_size + 1}/{(len(points)-1)//batch_size + 1} with {len(batch)} points")
-            except Exception as e:
-                print(f"Error upserting batch: {str(e)}")
-                # Try to continue with next batch even if one fails
-                continue
+                print(f"\n--- Attempt {attempt + 1}/{max_retries} ---")
                 
-        print(f"✅ Successfully indexed {len(points)} points from {os.path.basename(filepath)}")
-        processed_files += 1
-        
-    except Exception as e:
-        last_error = str(e)
-        print(f"Error indexing {filepath}: {str(e)}")
-        return
-        
-    # Upload points to Qdrant with retries
-    max_retries = 3
-    chunk_size = 10  # Smaller chunks for better error isolation
-    
-    print(f"Starting to process {len(points)} points in chunks of {chunk_size}")
-    print(f"Vector size: {vector_size}")
-    print(f"Collection name: {collection_name}")
-    
-    for attempt in range(max_retries):
-        try:
-            print(f"\n--- Attempt {attempt + 1}/{max_retries} ---")
-            
-            # First, verify collection exists and is accessible
-            try:
-                collection_info = client.get_collection(collection_name)
-                print(f"Collection info: {collection_info}")
-            except Exception as e:
-                print(f"Error getting collection info: {str(e)}")
-                # If collection doesn't exist, try to create it
-                try:
-                    client.recreate_collection(
-                        collection_name=collection_name,
-                        vectors_config=VectorParams(
-                            size=vector_size,
-                            distance=Distance.COSINE
+                # Process points in chunks
+                for i in range(0, len(points), chunk_size):
+                    chunk_points = points[i:i + chunk_size]
+                    chunk_num = i // chunk_size + 1
+                    total_chunks = (len(points) - 1) // chunk_size + 1
+                    
+                    print(f"\nChunk {chunk_num}/{total_chunks} ({len(chunk_points)} points)")
+                    
+                    try:
+                        # Print first point for debugging
+                        first_point = chunk_points[0]
+                        print(f"First point ID: {first_point['id']}")
+                        print(f"First point vector length: {len(first_point['vector'])}")
+                        
+                        # Try to upsert the chunk
+                        print(f"Upserting chunk {chunk_num}...")
+                        operation_info = client.upsert(
+                            collection_name=collection_name,
+                            points=chunk_points,
+                            wait=True
                         )
-                    )
-                    print(f"Recreated collection: {collection_name}")
-                except Exception as create_err:
-                    print(f"Failed to recreate collection: {str(create_err)}")
-                    raise
-            
-            # Process points in smaller chunks
-            for i in range(0, len(points), chunk_size):
-                chunk_points = points[i:i + chunk_size]
-                chunk_num = i // chunk_size + 1
-                total_chunks = (len(points) - 1) // chunk_size + 1
+                        print(f"Successfully upserted chunk {chunk_num}")
+                        
+                        # Verify the points were added
+                        count_result = client.count(
+                            collection_name=collection_name,
+                            count_filter=None
+                        )
+                        print(f"Current total points in collection: {count_result.count}")
+                        
+                    except Exception as chunk_error:
+                        print(f"\n--- ERROR in chunk {chunk_num} ---")
+                        print(f"Error type: {type(chunk_error).__name__}")
+                        print(f"Error details: {str(chunk_error)}")
+                        print("First point in failed chunk:")
+                        print(f"ID: {chunk_points[0]['id']}")
+                        raise  # Re-raise to trigger retry
                 
-                print(f"\nChunk {chunk_num}/{total_chunks} ({len(chunk_points)} points)")
+                # If we get here, all chunks were processed successfully
+                processed_files += 1
+                total_files = max(total_files, processed_files)
+                last_error = None
+                print(f"✅ Successfully processed {len(points)} chunks from {filepath}")
+                return  # Exit the function on success
                 
-                try:
-                    # Print first point for debugging
-                    first_point = chunk_points[0]
-                    print(f"First point ID: {first_point['id']}")
-                    print(f"First point vector length: {len(first_point['vector'])}")
-                    
-                    # Try to upsert the chunk
-                    print(f"Upserting chunk {chunk_num}...")
-                    operation_info = client.upsert(
-                        collection_name=collection_name,
-                        points=chunk_points,
-                        wait=True
-                    )
-                    print(f"Successfully upserted chunk {chunk_num}")
-                    
-                    # Verify the points were added
-                    count_result = client.count(
-                        collection_name=collection_name,
-                        count_filter=None
-                    )
-                    print(f"Current total points in collection: {count_result.count}")
-                    
-                except Exception as chunk_error:
-                    print(f"\n--- ERROR in chunk {chunk_num} ---")
-                    print(f"Error type: {type(chunk_error).__name__}")
-                    print(f"Error details: {str(chunk_error)}")
-                    print("First point in failed chunk:")
-                    print(f"ID: {chunk_points[0]['id']}")
-                    raise  # Re-raise to trigger retry
-            
-            # If we get here, all chunks were processed successfully
-            processed_files += 1
-            total_files = max(total_files, processed_files)
-            last_error = None
-            print(f"✅ Successfully processed {len(points)} chunks from {filepath}")
-            return  # Exit the function on success
-            
-        except Exception as e:
-            last_error = str(e)
-            print(f"❌ Attempt {attempt + 1} failed: {str(e)}")
-            
-            if attempt == max_retries - 1:  # Last attempt
-                error_msg = f"Failed to index {filepath} after {max_retries} attempts: {str(e)}"
-                print(error_msg)
-                last_error = error_msg
-                break
-            
-            # Wait before retry with exponential backoff
-            wait_time = 2 ** attempt
-            print(f"Waiting {wait_time} seconds before retry...")
-            time.sleep(wait_time)
+            except Exception as e:
+                last_error = str(e)
+                print(f"❌ Attempt {attempt + 1} failed: {str(e)}")
+                
+                if attempt == max_retries - 1:  # Last attempt
+                    error_msg = f"Failed to index {filepath} after {max_retries} attempts: {str(e)}"
+                    print(error_msg)
+                    last_error = error_msg
+                    break
+                
+                # Wait before retry with exponential backoff
+                wait_time = 2 ** attempt
+                print(f"Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
     
     # If we get here, all retries failed
     if last_error:
