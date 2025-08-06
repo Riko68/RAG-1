@@ -115,10 +115,12 @@ def index_document(filepath):
             print(f"Error generating embeddings for {filepath}: {str(e)}")
             return
         
-        # Create points with proper integer IDs
+        # Create points for Qdrant with named vectors
         points = [{
             "id": get_file_id(filepath, i),
-            "vector": emb.tolist(),
+            "vector": {
+                "text": emb.tolist()  # 'text' is the vector name
+            },
             "payload": {
                 "source": os.path.basename(filepath),
                 "chunk_id": i,
@@ -148,10 +150,12 @@ def index_document(filepath):
                 print(f"Creating new collection: {collection_name}")
                 client.create_collection(
                     collection_name=collection_name,
-                    vectors_config=VectorParams(
-                        size=vector_size,
-                        distance=Distance.COSINE
-                    )
+                    vectors_config={
+                        "text": VectorParams(
+                            size=vector_size,
+                            distance=Distance.COSINE
+                        )
+                    }
                 )
                 print(f"Successfully created collection: {collection_name}")
             except Exception as e:
