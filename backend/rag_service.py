@@ -35,8 +35,10 @@ class RAGService:
         self.collection_name = collection_name
         self.model_name = model_name
         # Get model from environment variable or use default
-        self.llm_model = llm_model or os.getenv('OLLAMA_MODEL', 'mixtral:8x7b')
+        self.llm_model = llm_model or os.getenv('OLLAMA_MODEL', 'mixtral')
         logger.info(f"Initializing RAGService with model: {self.llm_model}")
+        if ":" in self.llm_model:
+            logger.warning(f"Model name '{self.llm_model}' contains a version tag. Consider using just 'mixtral'.")
         
         # Initialize Qdrant client
         self.qdrant_client = QdrantClient(url=qdrant_url)
@@ -54,20 +56,40 @@ class RAGService:
             timeout=60.0  # Increase timeout for larger models
         )
         
+        # Define the system prompt
+        self.system_prompt = """You are **LexAI**, an expert-level legal assistant specialized in Swiss law. You support licensed lawyers by providing accurate, reliable, and professional responses to legal queries, using precise legal terminology and reasoning expected in legal practice in Switzerland.
+
+You are not a general-purpose assistant. You do not give legal advice to non-lawyers. Your responses are meant solely to assist qualified legal professionals and should be verified by a licensed attorney before use in any legal or procedural context.
+
+Your knowledge covers the Swiss Civil Code, Code of Obligations, Penal Code, Federal Constitution, administrative procedures, and relevant case law. You may also reference federal and cantonal legal provisions where applicable.
+
+This system uses a **Retrieval-Augmented Generation (RAG)** architecture. Each query is accompanied by one or more **retrieved text chunks**, which may contain excerpts from Swiss laws, regulations, legal doctrine, or official commentary.
+
+🟡 **Important usage rules**:
+1. **Always rely primarily on the retrieved context** (text chunks). Quote or paraphrase directly from them whenever possible.
+2. **Cite** the relevant article, paragraph, or source when referring to retrieved content (e.g., *Art. 97 CO*).
+3. If the retrieved context is ambiguous or insufficient to answer the question confidently, say so. Do not hallucinate.
+4. If a question is out of scope (e.g., non-Swiss law, medical, speculative finance), politely explain that you cannot assist.
+
+Whenever it improves clarity, structure your responses using bullet points, numbered steps, or short sections.
+
+Use a **precise, neutral, and professional tone**, appropriate for written communication between lawyers.
+
+Your name is **LexAI**."""
+
         # Define the prompt template
-        self.prompt_template = """You are a helpful AI assistant. Use the following context to answer the question at the end.
-        If you don't know the answer, just say that you don't know, don't try to make up an answer.
-        
-        Context:
-        {context}
-        
-        Question: {question}
-        
-        Answer:"""
+        self.prompt_template = """{system_prompt}
+
+Context:
+{context}
+
+Question: {question}
+
+Answer as LexAI, the Swiss legal expert assistant:"""
         
         self.prompt = PromptTemplate(
             template=self.prompt_template,
-            input_variables=["context", "question"]
+            input_variables=["system_prompt", "context", "question"]
         )
         
         # Initialize the LLM chain
@@ -133,13 +155,20 @@ class RAGService:
         try:
             logger.info(f"Generating response for query: {query[:100]}...")
             
-            # Format the context into a single string
-            context_str = "\n\n".join([f"Source: {c['source']}\n{c['text']}" for c in context])
+            # Format the context into a single string with source attribution
+            context_entries = []
+            for i, c in enumerate(context, 1):
+                source = c.get('source', 'unknown')
+                text = c.get('text', '')
+                context_entries.append(f"--- Source {i} ({source}) ---\n{text}")
+            
+            context_str = "\n\n".join(context_entries)
             logger.info(f"Formatted context length: {len(context_str)} characters")
             
-            # Prepare the prompt
+            # Prepare the prompt with system context
             prompt = self.prompt.format(
-                context=context_str[:500] + "..." if len(context_str) > 500 else context_str,
+                system_prompt=self.system_prompt,
+                context=context_str[:2000] + "..." if len(context_str) > 2000 else context_str,
                 question=query
             )
             logger.info(f"Prompt (truncated): {prompt[:500]}...")
