@@ -131,7 +131,7 @@ def index_document(filepath):
         from qdrant_client.models import Distance, VectorParams
         
         # Define collection name and vector size
-        collection_name = "docs"
+        collection_name = "rag_collection"  # Must match the collection name in the RAG service
         # Handle the case where embeddings might be a NumPy array
         if len(embeddings) > 0 and len(embeddings[0]) > 0:
             vector_size = len(embeddings[0])
