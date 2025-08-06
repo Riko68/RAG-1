@@ -153,7 +153,15 @@ def index_document(filepath):
                 # Create collection with optimized indexing settings
                 from qdrant_client.http.models import HnswConfigDiff, OptimizersConfigDiff
                 
-                client.recreate_collection(
+                # First, delete the collection if it exists
+                try:
+                    client.delete_collection(collection_name)
+                    print(f"Deleted existing collection: {collection_name}")
+                except Exception as e:
+                    print(f"No existing collection to delete: {str(e)}")
+                
+                # Create new collection with optimized settings
+                client.create_collection(
                     collection_name=collection_name,
                     vectors_config=VectorParams(
                         size=vector_size,
@@ -163,13 +171,22 @@ def index_document(filepath):
                     hnsw_config=HnswConfigDiff(
                         m=16,  # Good default for recall/performance balance
                         ef_construct=100,  # Good for recall
-                        full_scan_threshold=0,  # Force indexing all vectors
+                        full_scan_threshold=10,  # Minimum allowed value for indexing
                         on_disk=False  # Keep in memory for better performance
                     ),
                     optimizers_config=OptimizersConfigDiff(
                         indexing_threshold=0,  # Index all vectors immediately
                         memmap_threshold=20000,  # Keep vectors in memory
-                        max_optimization_threads=4  # Allow parallel optimization
+                        max_optimization_threads=4,  # Allow parallel optimization
+                        default_segment_number=1  # Force single segment for small collections
+                    )
+                )
+                
+                # Force immediate optimization
+                client.update_collection(
+                    collection_name=collection_name,
+                    optimizer_config=OptimizersConfigDiff(
+                        indexing_threshold=0,
                     )
                 )
                 print(f"Successfully created collection: {collection_name}")
