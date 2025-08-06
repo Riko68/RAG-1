@@ -6,6 +6,7 @@ from langchain_community.llms import Ollama
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ class RAGService:
         ollama_url: str,
         collection_name: str = "rag_collection",
         model_name: str = "BAAI/bge-m3",
-        llm_model: str = "llama3"
+        llm_model: str = None
     ):
         """
         Initialize the RAG service with Qdrant and Ollama.
@@ -32,7 +33,9 @@ class RAGService:
         self.ollama_url = ollama_url
         self.collection_name = collection_name
         self.model_name = model_name
-        self.llm_model = llm_model
+        # Get model from environment variable or use default
+        self.llm_model = llm_model or os.getenv('OLLAMA_MODEL', 'mixtral:8x7b')
+        logger.info(f"Initializing RAGService with model: {self.llm_model}")
         
         # Initialize Qdrant client
         self.qdrant_client = QdrantClient(url=qdrant_url)
