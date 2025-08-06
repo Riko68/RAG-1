@@ -298,16 +298,8 @@ def index_document(filepath):
     # If we get here, all retries failed
     if last_error:
         raise Exception(last_error)
-            
-    except Exception as e:
-        last_error = str(e)
-        error_msg = f"Error processing {filepath}: {last_error}"
-        print(error_msg)
-        raise Exception(error_msg) from e
         
-    finally:
-        is_indexing = False
-        current_file = None
+    return  # This should never be reached as we either return on success or raise an exception
 
 class DocumentHandler(FileSystemEventHandler):
     def on_created(self, event):
