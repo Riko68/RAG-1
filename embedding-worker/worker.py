@@ -134,14 +134,18 @@ def ensure_collection_exists(collection_name, vector_size=1024):
 def index_document(filepath):
     global is_indexing, current_file, processed_files, total_files, last_error
     
+    # Initialize state
+    last_error = None
+    is_indexing = True
+    current_file = os.path.basename(filepath)
+    
     try:
-        is_indexing = True
-        current_file = os.path.basename(filepath)
-        
+        # Read and process the file
         print(f"Indexing {filepath}...")
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             text = f.read()
         
+        # Generate chunks from the text
         chunks = chunk_text(text)
         
         # Skip empty files or files that couldn't be chunked
@@ -154,7 +158,8 @@ def index_document(filepath):
         if not chunks:
             print(f"Warning: No valid text chunks found in {filepath}")
             return
-            
+        
+        # Generate embeddings for the chunks
         try:
             embeddings = model.encode(chunks)
             if len(embeddings) == 0 or (hasattr(embeddings, 'shape') and embeddings.shape[0] == 0):
@@ -259,12 +264,23 @@ def index_document(filepath):
                 wait_time = 2 ** attempt
                 print(f"Waiting {wait_time} seconds before retry...")
                 time.sleep(wait_time)
-    
+        
         # If we get here, all retries failed
         if last_error:
             raise Exception(last_error)
             
         return  # This should never be reached as we either return on success or raise an exception
+        
+    except Exception as e:
+        # Handle any unexpected errors
+        last_error = str(e)
+        print(f"❌ Unexpected error processing {filepath}: {str(e)}")
+        raise
+        
+    finally:
+        # Always clean up
+        is_indexing = False
+        current_file = None
 
 class DocumentHandler(FileSystemEventHandler):
     def on_created(self, event):
