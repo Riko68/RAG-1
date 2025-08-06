@@ -302,8 +302,48 @@ async def ask_question(
 
 # Keep the old query endpoint for backward compatibility
 @app.post("/query", response_model=RAGResponse)
-async def query_endpoint(query: QueryRequest, role: str = Depends(get_role)):
+async def query_endpoint(
+    request: dict = {
+        "query": "What is the capital of France?",
+        "top_k": 3
+    },
+    role: str = Header("user", description="User role (user, admin)")
+):
     """
-    Legacy endpoint for backward compatibility.
+    Query the RAG system with a question.
+    
+    This is a simplified endpoint that doesn't require the full QueryRequest model.
+    It will automatically add debug logging of the search results.
+    
+    Example request:
+    ```
+    curl -X POST "http://localhost:8000/query" \
+         -H "Content-Type: application/json" \
+         -d '{"query": "Your question here"}'
     """
-    return await ask_question(query, role)
+    try:
+        # Convert to QueryRequest
+        query_request = QueryRequest(
+            query=request.get("query", ""),
+            top_k=request.get("top_k", 3)
+        )
+        
+        # Log the query
+        logger.info(f"Processing query: {query_request.query}")
+        
+        # Get the RAG service response
+        response = await ask_question(query_request, role)
+        
+        # Log the results for debugging
+        logger.info(f"Query: {query_request.query}")
+        logger.info(f"Answer: {response.answer}")
+        logger.info(f"Sources used: {', '.join(response.sources) if response.sources else 'None'}")
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error in query endpoint: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing your query: {str(e)}"
+        )
