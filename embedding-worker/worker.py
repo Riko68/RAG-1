@@ -150,12 +150,26 @@ def index_document(filepath):
         if collection_name not in collection_names:
             try:
                 print(f"Creating new collection: {collection_name}")
-                # Create collection with default vector configuration
+                # Create collection with optimized indexing settings
+                from qdrant_client.http.models import HnswConfigDiff, OptimizersConfigDiff
+                
                 client.recreate_collection(
                     collection_name=collection_name,
                     vectors_config=VectorParams(
                         size=vector_size,
                         distance=Distance.COSINE
+                    ),
+                    # Enable indexing with optimized settings
+                    hnsw_config=HnswConfigDiff(
+                        m=16,  # Good default for recall/performance balance
+                        ef_construct=100,  # Good for recall
+                        full_scan_threshold=0,  # Force indexing all vectors
+                        on_disk=False  # Keep in memory for better performance
+                    ),
+                    optimizers_config=OptimizersConfigDiff(
+                        indexing_threshold=0,  # Index all vectors immediately
+                        memmap_threshold=20000,  # Keep vectors in memory
+                        max_optimization_threads=4  # Allow parallel optimization
                     )
                 )
                 print(f"Successfully created collection: {collection_name}")
