@@ -92,8 +92,12 @@ Answer as LexAI, the Swiss legal expert assistant:"""
             input_variables=["system_prompt", "context", "question"]
         )
         
-        # Initialize the LLM chain
-        self.llm_chain = LLMChain(llm=self.llm, prompt=self.prompt)
+        # Initialize the LLM chain with the system prompt included
+        self.llm_chain = LLMChain(
+            llm=self.llm, 
+            prompt=self.prompt,
+            verbose=True  # Add verbose logging for debugging
+        )
     
     async def get_relevant_context(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
         """
@@ -165,23 +169,24 @@ Answer as LexAI, the Swiss legal expert assistant:"""
             context_str = "\n\n".join(context_entries)
             logger.info(f"Formatted context length: {len(context_str)} characters")
             
-            # Prepare the prompt with system context
-            prompt = self.prompt.format(
-                system_prompt=self.system_prompt,
-                context=context_str[:2000] + "..." if len(context_str) > 2000 else context_str,
-                question=query
-            )
-            logger.info(f"Prompt (truncated): {prompt[:500]}...")
+            # Prepare the context and question for the prompt
+            context_to_use = context_str[:2000] + "..." if len(context_str) > 2000 else context_str
+            
+            # Create the input dictionary with all required variables
+            chain_input = {
+                "system_prompt": self.system_prompt,
+                "context": context_to_use,
+                "question": query
+            }
+            logger.info(f"Prompt (truncated): {self.prompt.format(**chain_input)[:500]}...")
             
             # Generate response using the LLM chain with timeout
             logger.info("Sending request to LLM...")
             try:
+                # Generate the response using the LLM chain with all required variables
                 response = await asyncio.wait_for(
-                    self.llm_chain.arun({
-                        "context": context_str,
-                        "question": query
-                    }),
-                    timeout=60.0  # 60 second timeout for LLM
+                    self.llm_chain.arun(chain_input),
+                    timeout=60.0
                 )
                 logger.info("Successfully received response from LLM")
                 return response.strip()
