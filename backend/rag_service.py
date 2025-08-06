@@ -14,8 +14,8 @@ class RAGService:
         self,
         qdrant_url: str,
         ollama_url: str,
-        collection_name: str = "documents",
-        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        collection_name: str = "rag_collection",
+        model_name: str = "BAAI/bge-m3",
         llm_model: str = "llama3"
     ):
         """

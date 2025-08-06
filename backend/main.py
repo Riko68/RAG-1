@@ -129,10 +129,12 @@ async def startup_event():
     
     # Initialize RAG service
     try:
+        # Initialize RAG service with the same model as the embedding worker
         rag_service = RAGService(
             qdrant_url=QDRANT_URL,
             ollama_url=OLLAMA_URL,
-            collection_name=COLLECTION_NAME
+            collection_name=COLLECTION_NAME,
+            model_name="BAAI/bge-m3"  # Match the embedding worker's model
         )
         logger.info("RAG service initialized successfully")
     except Exception as e:
@@ -334,10 +336,19 @@ async def query_endpoint(
         # Get the RAG service response
         response = await ask_question(query_request, role)
         
+        # Convert response to dict if it's a Pydantic model
+        if hasattr(response, 'dict'):
+            response = response.dict()
+        
         # Log the results for debugging
         logger.info(f"Query: {query_request.query}")
-        logger.info(f"Answer: {response.answer}")
-        logger.info(f"Sources used: {', '.join(response.sources) if response.sources else 'None'}")
+        logger.info(f"Response: {response}")
+        
+        if isinstance(response, dict):
+            logger.info(f"Answer: {response.get('answer', 'No answer found')}")
+            sources = response.get('sources', [])
+            if sources:
+                logger.info(f"Sources used: {', '.join(sources) if isinstance(sources, list) else sources}")
         
         return response
         
