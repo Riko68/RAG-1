@@ -160,34 +160,38 @@ def index_document(filepath):
                 except Exception as e:
                     print(f"No existing collection to delete: {str(e)}")
                 
-                # Create new collection with optimized settings
+                # Create collection with minimal settings first
                 client.create_collection(
                     collection_name=collection_name,
                     vectors_config=VectorParams(
                         size=vector_size,
                         distance=Distance.COSINE
-                    ),
-                    # Enable indexing with optimized settings
-                    hnsw_config=HnswConfigDiff(
-                        m=16,  # Good default for recall/performance balance
-                        ef_construct=100,  # Good for recall
-                        full_scan_threshold=10,  # Minimum allowed value for indexing
-                        on_disk=False  # Keep in memory for better performance
-                    ),
-                    optimizers_config=OptimizersConfigDiff(
-                        indexing_threshold=0,  # Index all vectors immediately
-                        memmap_threshold=20000,  # Keep vectors in memory
-                        max_optimization_threads=4,  # Allow parallel optimization
-                        default_segment_number=1  # Force single segment for small collections
                     )
+                )
+                
+                # Then update with our optimized settings
+                client.update_collection(
+                    collection_name=collection_name,
+                    optimizers_config={
+                        'indexing_threshold': 0,  # Index all vectors
+                        'memmap_threshold': 20000,
+                        'default_segment_number': 1,
+                        'max_optimization_threads': 4
+                    },
+                    hnsw_config={
+                        'm': 16,
+                        'ef_construct': 100,
+                        'full_scan_threshold': 10,
+                        'on_disk': False
+                    }
                 )
                 
                 # Force immediate optimization
                 client.update_collection(
                     collection_name=collection_name,
-                    optimizer_config=OptimizersConfigDiff(
-                        indexing_threshold=0,
-                    )
+                    optimizer_config={
+                        'indexing_threshold': 0
+                    }
                 )
                 print(f"Successfully created collection: {collection_name}")
             except Exception as e:
