@@ -2,9 +2,18 @@ import os
 import time
 import threading
 import uvicorn
-from typing import Optional
-from fastapi import FastAPI
+import hashlib
+from typing import Optional, List, Dict, Any
+from fastapi import FastAPI, HTTPException
 from qdrant_client import QdrantClient
+from qdrant_client.http import models
+from qdrant_client.http.models import (
+    Distance, VectorParams, PointStruct, 
+    CollectionStatus, UpdateStatus, CollectionInfo,
+    VectorsConfig, OptimizersConfig, HnswConfig,
+    OptimizersConfigDiff, HnswConfigDiff, UpdateCollection,
+    CollectionParams
+)
 from sentence_transformers import SentenceTransformer
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
