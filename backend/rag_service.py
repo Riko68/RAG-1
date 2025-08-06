@@ -84,8 +84,13 @@ class RAGService:
             List of relevant document chunks with metadata
         """
         try:
+            logger.info(f"Generating embedding for query: {query[:100]}...")
+            
             # Generate embedding for the query
             query_embedding = self.embeddings.embed_query(query)
+            logger.info(f"Generated embedding of length: {len(query_embedding) if query_embedding else 0}")
+            
+            logger.info(f"Searching Qdrant collection '{self.collection_name}' for {top_k} results")
             
             # Search Qdrant for relevant documents
             search_results = self.qdrant_client.search(
@@ -95,6 +100,8 @@ class RAGService:
                 with_vectors=False,
                 with_payload=True
             )
+            
+            logger.info(f"Found {len(search_results)} results from Qdrant")
             
             # Format results
             results = []
@@ -123,20 +130,41 @@ class RAGService:
             Generated response from the LLM
         """
         try:
+            logger.info(f"Generating response for query: {query[:100]}...")
+            
             # Format the context into a single string
             context_str = "\n\n".join([f"Source: {c['source']}\n{c['text']}" for c in context])
+            logger.info(f"Formatted context length: {len(context_str)} characters")
             
-            # Generate response using the LLM chain
-            response = await self.llm_chain.arun({
-                "context": context_str,
-                "question": query
-            })
+            # Prepare the prompt
+            prompt = self.prompt.format(
+                context=context_str[:500] + "..." if len(context_str) > 500 else context_str,
+                question=query
+            )
+            logger.info(f"Prompt (truncated): {prompt[:500]}...")
             
-            return response.strip()
+            # Generate response using the LLM chain with timeout
+            logger.info("Sending request to LLM...")
+            try:
+                response = await asyncio.wait_for(
+                    self.llm_chain.arun({
+                        "context": context_str,
+                        "question": query
+                    }),
+                    timeout=60.0  # 60 second timeout for LLM
+                )
+                logger.info("Successfully received response from LLM")
+                return response.strip()
+                
+            except asyncio.TimeoutError:
+                error_msg = "LLM response timed out after 60 seconds"
+                logger.error(error_msg)
+                return "I'm sorry, the request took too long to process. Please try again with a more specific question."
             
         except Exception as e:
-            logger.error(f"Error generating response: {str(e)}")
-            return "I'm sorry, I encountered an error while processing your request."
+            error_msg = f"Error generating response: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return f"I'm sorry, I encountered an error while processing your request: {str(e)}"
     
     async def ask(self, query: str, top_k: int = 3) -> Dict[str, Any]:
         """
@@ -149,22 +177,39 @@ class RAGService:
         Returns:
             Dictionary containing the answer and sources
         """
-        # Get relevant context
-        context = await self.get_relevant_context(query, top_k)
+        logger.info(f"Processing query in ask(): {query[:100]}...")
         
-        if not context:
+        try:
+            # Get relevant context
+            logger.info(f"Retrieving top {top_k} relevant context chunks...")
+            context = await self.get_relevant_context(query, top_k)
+            
+            if not context:
+                logger.warning("No relevant context found for query")
+                return {
+                    "answer": "I couldn't find any relevant information to answer your question.",
+                    "sources": []
+                }
+            
+            logger.info(f"Found {len(context)} relevant context chunks")
+            
+            # Generate response
+            logger.info("Generating response...")
+            answer = await self.generate_response(query, context)
+            
+            # Extract unique sources
+            sources = list(set([c["source"] for c in context if c.get("source")]))
+            logger.info(f"Response generated with {len(sources)} sources")
+            
             return {
-                "answer": "I couldn't find any relevant information to answer your question.",
+                "answer": answer,
+                "sources": sources
+            }
+            
+        except Exception as e:
+            error_msg = f"Error in ask(): {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return {
+                "answer": f"I'm sorry, I encountered an error while processing your request: {str(e)}",
                 "sources": []
             }
-        
-        # Generate response
-        answer = await self.generate_response(query, context)
-        
-        # Extract unique sources
-        sources = list(set([c["source"] for c in context if c.get("source")]))
-        
-        return {
-            "answer": answer,
-            "sources": sources
-        }

@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, status
+import asyncio
+from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, status, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_limiter import FastAPILimiter
@@ -97,7 +98,12 @@ class DocumentListResponse(BaseModel):
 app = FastAPI(
     title="RAG API",
     description="API for Retrieval Augmented Generation system",
-    version="1.0.0"
+    version="1.0.0",
+    # Ensure proper encoding for non-ASCII characters
+    default_response_class=JSONResponse,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json"
 )
 
 @app.get("/health")
@@ -105,14 +111,27 @@ async def health_check():
     """Health check endpoint"""
     return {"status": "healthy"}
 
-# Configure CORS
+# Configure CORS with more specific settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # In production, replace with specific origins
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=600,  # Cache preflight requests for 10 minutes
 )
+
+# Add middleware to ensure proper request/response encoding
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Add security headers and ensure proper content type for responses."""
+    response = await call_next(request)
+    response.headers["Content-Type"] = "application/json; charset=utf-8"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    return response
 
 # Initialize services
 rag_service = None
@@ -322,33 +341,52 @@ async def query_endpoint(
          -d '{"query": "Your question here"}'
     """
     try:
+        # Log the raw request
+        logger.info(f"Received request: {request}")
+        
         # Get query text, supporting both 'question' and 'query' fields for backward compatibility
         query_text = request.get("query", "") or request.get("question", "")
         if not query_text:
-            raise ValueError("Missing required field 'query' or 'question' in request body")
+            error_msg = "Missing required field 'query' or 'question' in request body"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
             
+        # Log the extracted query text
+        logger.info(f"Extracted query text: {query_text}")
+        
         # Convert to QueryRequest
         query_request = QueryRequest(
             query=query_text,
             top_k=request.get("top_k", 3)
         )
         
-        # Log the query
+        # Log the query request
         logger.info(f"Processing query: {query_request.query}")
+        logger.info(f"Top K: {query_request.top_k}")
         
-        # Get the RAG service response
-        response = await ask_question(query_request, role)
+        # Get the RAG service response with timeout
+        try:
+            response = await asyncio.wait_for(
+                ask_question(query_request, role),
+                timeout=30.0  # 30 second timeout
+            )
+        except asyncio.TimeoutError:
+            error_msg = "Query processing timed out after 30 seconds"
+            logger.error(error_msg)
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail=error_msg
+            )
         
         # Convert response to dict if it's a Pydantic model
         if hasattr(response, 'dict'):
             response = response.dict()
         
         # Log the results for debugging
-        logger.info(f"Query: {query_request.query}")
-        logger.info(f"Response: {response}")
-        
+        logger.info(f"Successfully processed query: {query_request.query}")
         if isinstance(response, dict):
-            logger.info(f"Answer: {response.get('answer', 'No answer found')}")
+            answer = response.get('answer', 'No answer found')
+            logger.info(f"Answer length: {len(answer)} characters")
             sources = response.get('sources', [])
             if sources:
                 logger.info(f"Sources used: {', '.join(sources) if isinstance(sources, list) else sources}")
