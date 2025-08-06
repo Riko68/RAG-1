@@ -83,6 +83,58 @@ def chunk_text(text, chunk_size=500, overlap=100):
             chunks.append(chunk)
     return chunks
 
+def query_embeddings(query_text, collection_name="rag_collection", limit=5):
+    """
+    Query the Qdrant collection for documents similar to the query text.
+    
+    Args:
+        query_text (str): The text to find similar documents for
+        collection_name (str): Name of the Qdrant collection to search in
+        limit (int): Maximum number of results to return
+        
+    Returns:
+        list: List of matching documents with their scores and metadata
+    """
+    try:
+        print(f"\n🔍 Searching for: '{query_text}'")
+        
+        # Generate embedding for the query
+        query_embedding = model.encode(query_text).tolist()
+        
+        # Search in Qdrant
+        search_results = client.search(
+            collection_name=collection_name,
+            query_vector=query_embedding,
+            limit=limit,
+            with_payload=True,
+            with_vectors=False
+        )
+        
+        # Process and format results
+        results = []
+        for i, hit in enumerate(search_results, 1):
+            result = {
+                'rank': i,
+                'score': hit.score,
+                'source': hit.payload.get('source', 'Unknown'),
+                'text': hit.payload.get('text', '')[:200] + '...',  # Show first 200 chars
+                'chunk_id': hit.payload.get('chunk_id', -1),
+                'full_path': hit.payload.get('full_path', '')
+            }
+            results.append(result)
+            
+            # Print result summary
+            print(f"\n📄 Result {i} (Score: {hit.score:.4f})")
+            print(f"📂 Source: {result['source']}")
+            print(f"🔗 Path: {result['full_path']}")
+            print(f"📝 Text: {result['text']}")
+        
+        return results
+        
+    except Exception as e:
+        print(f"❌ Error querying embeddings: {str(e)}")
+        raise
+
 def get_file_id(filepath, chunk_idx):
     """Generate a consistent integer ID from file path and chunk index"""
     import hashlib
@@ -289,10 +341,68 @@ class DocumentHandler(FileSystemEventHandler):
         if event.src_path.endswith(('.txt', '.md')):
             index_document(event.src_path)
 
+def interactive_query_mode():
+    """Run an interactive query mode for testing document search"""
+    print("\n" + "="*50)
+    print("  DOCUMENT SEARCH MODE")
+    print("  Type 'exit' to quit")
+    print("  Type 'status' to see indexing status")
+    print("="*50 + "\n")
+    
+    while True:
+        try:
+            query = input("\n🔎 Enter your search query: ").strip()
+            
+            if query.lower() == 'exit':
+                print("Exiting search mode...")
+                break
+                
+            if query.lower() == 'status':
+                print(f"\n📊 Indexing Status:")
+                print(f"- Current file: {current_file or 'None'}")
+                print(f"- Processed files: {processed_files}")
+                print(f"- Total files: {total_files}")
+                if last_error:
+                    print(f"- Last error: {last_error}")
+                continue
+                
+            if not query:
+                continue
+                
+            # Execute the search
+            query_embeddings(query)
+            
+        except KeyboardInterrupt:
+            print("\nExiting search mode...")
+            break
+        except Exception as e:
+            print(f"\n❌ Error: {str(e)}")
+
 if __name__ == "__main__":
+    import argparse
+    
+    # Set up command line arguments
+    parser = argparse.ArgumentParser(description='Document Embedding Worker')
+    parser.add_argument('--query', action='store_true', 
+                       help='Run in interactive query mode')
+    parser.add_argument('--search', type=str, 
+                       help='Run a single search query and exit')
+    args = parser.parse_args()
+    
     # Start the status server in a separate thread
     status_thread = threading.Thread(target=run_status_server, daemon=True)
     status_thread.start()
+    
+    # Handle query mode if requested
+    if args.search:
+        query_embeddings(args.search)
+        sys.exit(0)
+    elif args.query:
+        interactive_query_mode()
+        sys.exit(0)
+    
+    # Default behavior: start file watcher and index existing files
+    print(f"Starting document indexer in {DOCS_PATH}...")
     
     # On startup, index all existing docs
     files = [f for f in os.listdir(DOCS_PATH) 
@@ -312,13 +422,16 @@ if __name__ == "__main__":
     observer = Observer()
     observer.schedule(event_handler, DOCS_PATH, recursive=True)
     observer.start()
+    
     print(f"Watching {DOCS_PATH} for new documents...")
     print(f"Status available at http://localhost:{STATUS_PORT}/status")
+    print("\nUse --query to start interactive search mode")
+    print("or --search 'your query' to search directly")
     
     try:
         while True:
-            time.sleep(60)
+            time.sleep(1)
     except KeyboardInterrupt:
-        observer.stop()
         print("\nShutting down...")
+        observer.stop()
     observer.join()
