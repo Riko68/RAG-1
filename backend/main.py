@@ -306,10 +306,7 @@ async def ask_question(
 # Keep the old query endpoint for backward compatibility
 @app.post("/query", response_model=RAGResponse)
 async def query_endpoint(
-    request: dict = {
-        "query": "What is the capital of France?",
-        "top_k": 3
-    },
+    request: dict,
     role: str = Header("user", description="User role (user, admin)")
 ):
     """
