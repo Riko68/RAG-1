@@ -59,10 +59,11 @@ services:
     networks:
       - rag-network
     volumes:
-      - /root/.ollama
+      - ollama_data:/root/.ollama
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
+      - OLLAMA_MODEL=mixtral  # Default model to use
 
   backend:
     build: ./backend
@@ -73,7 +74,7 @@ services:
     environment:
       - QDRANT_URL=http://qdrant:6333
       - OLLAMA_URL=http://ollama:11434
-      - OLLAMA_MODEL=mixtral:8x7b
+      - OLLAMA_MODEL=mixtral
       - COLLECTION_NAME=rag_collection
       - DOCS_PATH=/documents
       - HOST=0.0.0.0
