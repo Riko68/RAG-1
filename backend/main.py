@@ -129,12 +129,13 @@ async def startup_event():
     
     # Initialize RAG service
     try:
-        # Initialize RAG service with the same model as the embedding worker
+        # Initialize RAG service with the specified model
         rag_service = RAGService(
             qdrant_url=QDRANT_URL,
             ollama_url=OLLAMA_URL,
             collection_name=COLLECTION_NAME,
-            model_name="BAAI/bge-m3"  # Match the embedding worker's model
+            model_name="BAAI/bge-m3",  # Embedding model
+            llm_model=os.getenv('OLLAMA_MODEL', 'mixtral:8x7b')  # LLM model
         )
         logger.info("RAG service initialized successfully")
     except Exception as e:

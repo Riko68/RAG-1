@@ -44,11 +44,13 @@ class RAGService:
         self.embeddings = HuggingFaceEmbeddings(model_name=model_name)
         
         # Initialize LLM
+        logger.info(f"Initializing Ollama with model: {self.llm_model}")
         self.llm = Ollama(
             base_url=ollama_url,
-            model=llm_model,
+            model=self.llm_model,  # Use the instance variable
             temperature=0.1,
-            num_ctx=4096  # Context window size
+            num_ctx=4096,  # Context window size
+            timeout=60.0  # Increase timeout for larger models
         )
         
         # Define the prompt template
