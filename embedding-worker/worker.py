@@ -260,11 +260,11 @@ def index_document(filepath):
                 print(f"Waiting {wait_time} seconds before retry...")
                 time.sleep(wait_time)
     
-    # If we get here, all retries failed
-    if last_error:
-        raise Exception(last_error)
-        
-    return  # This should never be reached as we either return on success or raise an exception
+        # If we get here, all retries failed
+        if last_error:
+            raise Exception(last_error)
+            
+        return  # This should never be reached as we either return on success or raise an exception
 
 class DocumentHandler(FileSystemEventHandler):
     def on_created(self, event):
