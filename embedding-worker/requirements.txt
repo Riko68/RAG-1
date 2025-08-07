@@ -15,7 +15,7 @@ tqdm>=4.62.0,<5.0.0
 # Document processing
 pypdf>=3.0.0,<4.0.0
 python-docx>=0.8.11,<1.0.0
-python-magic>=0.4.24,<1.0.0
+python-magic>=0.4.24,<1.0.0; platform_system!="Windows"
 python-magic-bin>=0.4.14,<1.0.0; platform_system=="Windows"
 
 # Text processing
