@@ -1,0 +1,80 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local development
+*.log
+logs/
+
+# Project specific
+uploads/*
+!uploads/.gitkeep
+processed/*
+!processed/.gitkeep
+
+# Model files
+*.bin
+*.h5
+*.pth
+*.pt
+*.pkl
+*.joblib
+
+# Cache
+.cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local development settings
+local_settings.py
+
+# Docker
+.dockerignore
+Dockerfile
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
