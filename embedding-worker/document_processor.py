@@ -13,7 +13,10 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
 import spacy
+from spacy.language import Language
 from spacy.lang.en import English
+from spacy.lang.fr import French
+from spacy.lang.de import German
 from pypdf import PdfReader
 from docx import Document as DocxDocument
 from langchain.text_splitter import (
@@ -44,17 +47,45 @@ class DocumentProcessor:
     """Processes different document types and splits them into semantic chunks."""
     
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
-        """Initialize the document processor with semantic chunking capabilities.
+        """Initialize the document processor with multi-language support and semantic chunking.
         
         Args:
             chunk_size: Maximum size of each text chunk (in characters)
-            chunk_overlap: Overlap between chunks (in characters)
+            chunk_overlap: Number of characters to overlap between chunks
         """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         
-        # Load NLP models
-        self.nlp = spacy.load("en_core_web_sm")
+        # Load language models with medium-sized models for better accuracy
+        self.nlp_models = {}
+        try:
+            self.nlp_models['en'] = spacy.load('en_core_web_md')
+            # Use the default English model for backward compatibility
+            self.nlp = self.nlp_models.get('en', spacy.blank('en'))
+            logger.info("Loaded English language model (medium)")
+        except OSError:
+            logger.warning("English medium model not found, downloading...")
+            os.system('python -m spacy download en_core_web_md')
+            self.nlp_models['en'] = spacy.load('en_core_web_md')
+            
+        try:
+            self.nlp_models['fr'] = spacy.load('fr_core_news_md')
+            logger.info("Loaded French language model (medium)")
+        except OSError:
+            logger.warning("French medium model not found, downloading...")
+            os.system('python -m spacy download fr_core_news_md')
+            self.nlp_models['fr'] = spacy.load('fr_core_news_md')
+            
+        try:
+            self.nlp_models['de'] = spacy.load('de_core_news_md')
+            logger.info("Loaded German language model (medium)")
+        except OSError as e:
+            logger.warning("German medium model not found, downloading...")
+            os.system('python -m spacy download de_core_news_md')
+            self.nlp_models['de'] = spacy.load('de_core_news_md')
+        
+        # Set default language
+        self.default_lang = 'en'
         
         # Configure text splitters
         self.base_splitter = RecursiveCharacterTextSplitter(
@@ -111,6 +142,10 @@ class DocumentProcessor:
                 logger.warning(f"No content extracted from {filepath}")
                 return []
                 
+            # Detect language
+            detected_lang = self._detect_language(text)
+            self.nlp = self.nlp_models.get(detected_lang, self.nlp)
+            
             # Add file metadata
             metadata = {
                 'source': os.path.basename(filepath),
@@ -118,7 +153,8 @@ class DocumentProcessor:
                 'file_type': file_type,
                 'file_size_mb': round(file_size, 2),
                 'last_modified': file_stats.st_mtime,
-                'created': file_stats.st_ctime
+                'created': file_stats.st_ctime,
+                'language': detected_lang
             }
             
             # Clean and chunk the text with metadata
