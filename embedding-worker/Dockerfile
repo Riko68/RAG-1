@@ -15,6 +15,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxslt1-dev \
     # For compiling C extensions
     build-essential \
+    # For sentencepiece
+    cmake \
+    pkg-config \
+    # For language detection
+    libicu-dev \
+    # For Python packages
+    libssl-dev \
+    zlib1g-dev \
+    libbz2-dev \
+    libreadline-dev \
+    libsqlite3-dev \
+    llvm \
+    libncurses5-dev \
+    libncursesw5-dev \
+    xz-utils \
+    tk-dev \
+    libffi-dev \
+    liblzma-dev \
+    # Clean up
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages
