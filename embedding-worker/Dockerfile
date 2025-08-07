@@ -1,23 +1,3 @@
-FROM python:3.9-bookworm as builder
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    cmake \
-    pkg-config \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# Build sentencepiece from source (using a more recent version)
-RUN git clone --depth 1 --branch v0.1.99 https://github.com/google/sentencepiece.git /tmp/sentencepiece && \
-    mkdir -p /tmp/sentencepiece/build && \
-    cd /tmp/sentencepiece/build && \
-    cmake .. -DSPM_BUILD_TEST=OFF -DSPM_ENABLE_SHARED=ON && \
-    make -j $(nproc) && \
-    make install && \
-    ldconfig
-
-# Now create the final image
 FROM python:3.9-slim
 
 WORKDIR /app
@@ -35,9 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxslt1-dev \
     # For compiling C extensions
     build-essential \
-    # For sentencepiece
+    # For sentencepiece and other build tools
     cmake \
     pkg-config \
+    git \
     # For language detection
     libicu-dev \
     # For Python packages

@@ -1,16 +1,15 @@
+# Core dependencies
 huggingface-hub>=0.16.0,<0.17.0
-sentence-transformers==2.2.2
-qdrant-client==1.6.9
-watchdog==3.0.0
+sentence-transformers>=2.2.2,<3.0.0
+qdrant-client>=1.6.9,<2.0.0
 fastapi>=0.68.0,<1.0.0
 uvicorn>=0.15.0,<1.0.0
 python-multipart>=0.0.5,<1.0.0
-qdrant-client>=1.1.0,<2.0.0
-sentence-transformers>=2.2.0,<3.0.0
 pydantic>=1.8.0,<2.0.0
 python-dotenv>=0.19.0,<1.0.0
 numpy>=1.21.0,<2.0.0
-tqdm>=4.62.0,<5.0.0
+tqdm>=4.65.0,<5.0.0
+watchdog>=3.0.0,<4.0.0
 
 # Document processing
 pypdf>=3.0.0,<4.0.0
@@ -18,14 +17,14 @@ python-docx>=0.8.11,<1.0.0
 python-magic>=0.4.24,<1.0.0; platform_system!="Windows"
 python-magic-bin>=0.4.14,<1.0.0; platform_system=="Windows"
 
-# Text processing
+# Text processing and NLP
 spacy>=3.5.0,<4.0.0
 langdetect>=1.0.9,<2.0.0
 langchain>=0.0.200,<0.1.0
 scikit-learn
 scipy
 nltk
-sentencepiece
+sentencepiece>=0.1.99
 
 # Language models (will be downloaded on first use)
 # English
@@ -34,12 +33,6 @@ https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.7.1
 https://github.com/explosion/spacy-models/releases/download/fr_core_news_md-3.7.0/fr_core_news_md-3.7.0.tar.gz
 # German
 https://github.com/explosion/spacy-models/releases/download/de_core_news_md-3.7.0/de_core_news_md-3.7.0.tar.gz
-python-magic-bin>=0.4.14; platform_system=="Windows"
 
-# Text processing and chunking
-langchain>=0.0.200
-spacy>=3.5.0
+# Additional models
 en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.5.0/en_core_web_sm-3.5.0-py3-none-any.whl
-
-# Utilities
-tqdm>=4.65.0
