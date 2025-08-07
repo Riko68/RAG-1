@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
+# Set Python path
+ENV PYTHONPATH=/app
+
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
