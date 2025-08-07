@@ -1,23 +1,32 @@
 # Embedding Worker
 
-A service that processes and indexes documents for the RAG (Retrieval-Augmented Generation) system.
+A service that processes and embeds documents for the RAG (Retrieval-Augmented Generation) system with advanced semantic chunking.
 
 ## Features
 
-- **Document Processing**:
-  - Supports multiple file formats: PDF, DOCX, TXT, MD
-  - Smart chunking with semantic awareness
-  - Metadata extraction and preservation
+- **Multi-format Support**: Process PDF, DOCX, and plain text files
+- **Semantic Chunking**: Intelligent text splitting based on document structure and content
+- **Format Preservation**: Maintains document structure including headings, lists, and sections
+- **Smart Merging**: Combines small chunks while respecting semantic boundaries
+- **Metadata Enrichment**: Includes document and chunk-level metadata for better retrieval
+- **Configurable**: Adjustable chunk sizes, overlap, and processing parameters
 
-- **Vector Database Integration**:
-  - Indexes document chunks in Qdrant
-  - Handles document updates and deletions
-  - Configurable chunk size and overlap
+## Semantic Chunking
 
-- **API Endpoints**:
-  - `/status`: Check service status
-  - `/search`: Query indexed documents
-  - `/index`: Trigger document indexing
+The embedding worker uses a multi-level chunking strategy:
+
+1. **Semantic Boundary Detection**: Identifies natural breaks like headings, sections, and lists
+2. **Intelligent Splitting**: Splits text at semantic boundaries while respecting chunk size constraints
+3. **Context Preservation**: Maintains related content together for better context understanding
+4. **Metadata Enrichment**: Adds chunk type and source information to each chunk
+
+### Chunk Types
+
+- `heading`: Section headings (e.g., # Title, ## Subtitle)
+- `paragraph`: Regular text paragraphs
+- `list_item`: Items in bulleted or numbered lists
+- `sentence`: Individual sentences (used when larger chunks aren't appropriate)
+- `document`: Default type for unstructured content
 
 ## Setup
 
@@ -33,6 +42,7 @@ A service that processes and indexes documents for the RAG (Retrieval-Augmented 
    COLLECTION_NAME=rag_documents
    CHUNK_SIZE=1000
    CHUNK_OVERLAP=200
+   LOG_LEVEL=INFO
    ```
 
 ## Usage

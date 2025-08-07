@@ -13,9 +13,18 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
 import spacy
+from spacy.lang.en import English
 from pypdf import PdfReader
 from docx import Document as DocxDocument
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.text_splitter import (
+    RecursiveCharacterTextSplitter,
+    MarkdownHeaderTextSplitter,
+    PythonCodeTextSplitter
+)
+from typing import List, Dict, Any, Optional, Tuple, Generator, Union
+from dataclasses import dataclass, field
+import re
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +41,10 @@ class DocumentChunk:
     metadata: Dict[str, Any]
 
 class DocumentProcessor:
-    """Processes different document types and splits them into chunks."""
+    """Processes different document types and splits them into semantic chunks."""
     
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
-        """Initialize the document processor.
+        """Initialize the document processor with semantic chunking capabilities.
         
         Args:
             chunk_size: Maximum size of each text chunk (in characters)
@@ -43,13 +52,29 @@ class DocumentProcessor:
         """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        
+        # Load NLP models
         self.nlp = spacy.load("en_core_web_sm")
-        self.text_splitter = RecursiveCharacterTextSplitter(
+        
+        # Configure text splitters
+        self.base_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             length_function=len,
-            separators=["\n\n", "\n", ". ", " ", ""]
+            separators=["\n\n\n", "\n\n", "\n", ". ", "? ", "! ", " ", ""]
         )
+        
+        # Semantic chunking configuration
+        self.semantic_separators = [
+            (re.compile(r'\n#{1,3}\s+'), 'heading'),  # Markdown headings
+            (re.compile(r'\n\s*[A-Z][^\n]{20,}[\.!?]\s+'), 'sentence'),  # Sentence endings
+            (re.compile(r'\n\s*\*\s+'), 'list_item'),  # List items
+            (re.compile(r'\n\s*\d+\.\s+'), 'numbered_item'),  # Numbered lists
+        ]
+        
+        # Semantic chunk size thresholds (in characters)
+        self.min_chunk_size = chunk_size // 4
+        self.max_chunk_size = chunk_size * 2
         
     def process_file(self, filepath: str) -> List[DocumentChunk]:
         """Process a file and return its chunks with metadata.
@@ -214,71 +239,166 @@ class DocumentProcessor:
             logger.error(f"Error extracting text from PDF {filepath}: {str(e)}", exc_info=True)
             raise
     
-    def _chunk_text(self, text: str, source_path: str) -> List[DocumentChunk]:
-        """Split text into chunks with metadata.
+    def _chunk_text(self, text: str, metadata: Dict[str, Any]) -> List[DocumentChunk]:
+        """Split text into semantic chunks with enhanced metadata.
+        
+        This method uses a multi-level chunking strategy:
+        1. Split by major semantic boundaries (headings, sections)
+        2. Further split by paragraphs and sentences
+        3. Ensure chunks respect semantic units and size constraints
         
         Args:
             text: Text to chunk
-            source_path: Path to the source file
+            metadata: Metadata dictionary for the source file
             
         Returns:
-            List of DocumentChunk objects
+            List of DocumentChunk objects with semantic metadata
         """
-        # Basic cleaning
         text = text.strip()
         if not text:
             return []
             
-        # Split into paragraphs first (double newlines)
-        paragraphs = re.split(r'\n\s*\n', text)
+        # Enhanced metadata
+        chunk_metadata = metadata.copy()
         chunks = []
         
-        for para in paragraphs:
-            if not para.strip():
+        # First pass: Split by major semantic boundaries
+        segments = self._split_by_semantic_boundaries(text)
+        
+        # Second pass: Process each segment
+        for segment, segment_type in segments:
+            if not segment.strip():
                 continue
                 
-            # Use spacy for sentence boundary detection
-            doc = self.nlp(para)
-            sentences = [sent.text for sent in doc.sents]
+            # Update metadata with segment type
+            segment_metadata = chunk_metadata.copy()
+            segment_metadata['chunk_type'] = segment_type
             
-            # Build chunks with complete sentences
-            current_chunk = []
-            current_length = 0
+            # If segment is small, add as is
+            if len(segment) <= self.chunk_size + self.chunk_overlap:
+                chunks.append(DocumentChunk(
+                    text=segment,
+                    metadata=segment_metadata
+                ))
+                continue
+                
+            # Otherwise, split further by paragraphs and sentences
+            sub_chunks = self._split_by_paragraphs_and_sentences(segment, segment_metadata)
+            chunks.extend(sub_chunks)
+        
+        # Final pass: Merge small chunks where possible
+        chunks = self._merge_small_chunks(chunks)
+        
+        return chunks
+        
+    def _split_by_semantic_boundaries(self, text: str) -> List[tuple]:
+        """Split text by semantic boundaries like headings, sections, etc."""
+        segments = [(text, 'document')]  # Default to 'document' type
+        
+        # Try each semantic separator in order of priority
+        for pattern, seg_type in self.semantic_separators:
+            new_segments = []
             
-            for sent in sentences:
-                sent = sent.strip()
-                if not sent:
+            for segment, current_type in segments:
+                # Skip if segment is already small enough
+                if len(segment) <= self.chunk_size:
+                    new_segments.append((segment, current_type))
                     continue
                     
+                # Split by the current pattern
+                parts = pattern.split(segment)
+                if len(parts) <= 1:  # No splits occurred
+                    new_segments.append((segment, current_type))
+                    continue
+                    
+                # Rebuild segments with proper types
+                for i, part in enumerate(parts):
+                    if not part.strip():
+                        continue
+                        
+                    # Every odd part is a separator (captured in split)
+                    if i % 2 == 1:
+                        new_segments.append((part, seg_type))
+                    else:
+                        new_segments.append((part, current_type))
+            
+            segments = new_segments
+            
+        return segments
+        
+    def _split_by_paragraphs_and_sentences(self, text: str, metadata: Dict[str, Any]) -> List[DocumentChunk]:
+        """Split text into chunks respecting paragraphs and sentences."""
+        chunks = []
+        current_chunk = []
+        current_length = 0
+        
+        # Split into paragraphs first
+        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+        
+        for para in paragraphs:
+            # Process each paragraph with spaCy for sentence segmentation
+            doc = self.nlp(para)
+            sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+            
+            for sent in sentences:
                 sent_length = len(sent)
                 
-                # If adding this sentence would exceed chunk size, finalize current chunk
-                if current_chunk and (current_length + sent_length > self.chunk_size):
-                    chunk_text = " ".join(current_chunk)
+                # If adding this sentence would exceed max chunk size, finalize current chunk
+                if current_chunk and (current_length + sent_length > self.max_chunk_size):
+                    chunk_text = ' '.join(current_chunk)
                     chunks.append(DocumentChunk(
                         text=chunk_text,
-                        metadata={
-                            'source': os.path.basename(source_path),
-                            'full_path': source_path,
-                            'chunk_type': 'paragraph'
-                        }
+                        metadata=metadata.copy()
                     ))
                     current_chunk = []
                     current_length = 0
                 
                 current_chunk.append(sent)
                 current_length += sent_length
-            
-            # Add the last chunk if there's any remaining text
-            if current_chunk:
-                chunk_text = " ".join(current_chunk)
-                chunks.append(DocumentChunk(
-                    text=chunk_text,
-                    metadata={
-                        'source': os.path.basename(source_path),
-                        'full_path': source_path,
-                        'chunk_type': 'paragraph'
-                    }
-                ))
+        
+        # Add the last chunk if there's any remaining text
+        if current_chunk:
+            chunk_text = ' '.join(current_chunk)
+            chunks.append(DocumentChunk(
+                text=chunk_text,
+                metadata=metadata.copy()
+            ))
         
         return chunks
+        
+    def _merge_small_chunks(self, chunks: List[DocumentChunk]) -> List[DocumentChunk]:
+        """Merge small chunks to avoid too many tiny chunks."""
+        if not chunks:
+            return []
+            
+        merged_chunks = []
+        current_chunk = chunks[0].text
+        current_metadata = chunks[0].metadata.copy()
+        current_length = len(current_chunk)
+        
+        for chunk in chunks[1:]:
+            chunk_text = chunk.text
+            chunk_length = len(chunk_text)
+            
+            # If merging would keep us under chunk size, merge
+            if current_length + chunk_length <= self.chunk_size + self.chunk_overlap:
+                current_chunk += ' ' + chunk_text
+                current_length += chunk_length + 1  # +1 for space
+            else:
+                # Otherwise, finalize current chunk and start a new one
+                merged_chunks.append(DocumentChunk(
+                    text=current_chunk,
+                    metadata=current_metadata
+                ))
+                current_chunk = chunk_text
+                current_metadata = chunk.metadata.copy()
+                current_length = chunk_length
+        
+        # Add the last chunk
+        if current_chunk:
+            merged_chunks.append(DocumentChunk(
+                text=current_chunk,
+                metadata=current_metadata
+            ))
+            
+        return merged_chunks
