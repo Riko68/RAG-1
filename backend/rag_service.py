@@ -1,6 +1,7 @@
 import asyncio
-from typing import List, Dict, Any, Optional
-from pydantic import BaseModel
+import uuid
+from typing import List, Dict, Any, Optional, Union
+from pydantic import BaseModel, Field
 from qdrant_client import QdrantClient
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.llms import Ollama
@@ -9,6 +10,8 @@ from langchain.prompts import PromptTemplate
 import logging
 import os
 
+from .memory import MemoryManager, ConversationMemory
+
 logger = logging.getLogger(__name__)
 
 class RAGService:
@@ -16,24 +19,32 @@ class RAGService:
         self,
         qdrant_url: str,
         ollama_url: str,
+        redis_client = None,
         collection_name: str = "rag_collection",
         model_name: str = "BAAI/bge-m3",
-        llm_model: str = None
+        llm_model: str = None,
+        memory_ttl_hours: int = 24,
+        max_history_messages: int = 10
     ):
         """
-        Initialize the RAG service with Qdrant and Ollama.
+        Initialize the RAG service with Qdrant, Ollama, and optional memory.
         
         Args:
             qdrant_url: URL of the Qdrant server
             ollama_url: URL of the Ollama server
+            redis_client: Optional Redis client for conversation memory
             collection_name: Name of the Qdrant collection
             model_name: Name of the embedding model
             llm_model: Name of the Ollama model to use
+            memory_ttl_hours: TTL in hours for conversation memory (if Redis is used)
+            max_history_messages: Maximum number of historical messages to include in context
         """
         self.qdrant_url = qdrant_url
         self.ollama_url = ollama_url
         self.collection_name = collection_name
         self.model_name = model_name
+        self.max_history_messages = max_history_messages
+        
         # Get model from environment variable or use default
         self.llm_model = llm_model or os.getenv('OLLAMA_MODEL', 'mixtral')
         logger.info(f"Initializing RAGService with model: {self.llm_model}")
@@ -50,26 +61,40 @@ class RAGService:
         logger.info(f"Initializing Ollama with model: {self.llm_model}")
         self.llm = Ollama(
             base_url=ollama_url,
-            model=self.llm_model,  # Use the instance variable
+            model=self.llm_model,
             temperature=0.1,
             num_ctx=4096,  # Context window size
             timeout=60.0  # Increase timeout for larger models
         )
         
-        # Define the system prompt
+        # Initialize memory management if Redis is available
+        self.memory_manager = None
+        if redis_client:
+            self.memory_manager = MemoryManager(
+                redis_client=redis_client,
+                default_ttl_hours=memory_ttl_hours
+            )
+            logger.info("Conversation memory enabled with Redis")
+        else:
+            logger.warning("No Redis client provided - conversation memory will be disabled")
+        
+        # Define the system prompt with memory context placeholders
         self.system_prompt = """You are **LexAI**, an expert-level legal assistant specialized in Swiss law. You support licensed lawyers by providing accurate, reliable, and professional responses to legal queries, using precise legal terminology and reasoning expected in legal practice in Switzerland.
 
 You are not a general-purpose assistant. You do not give legal advice to non-lawyers. Your responses are meant solely to assist qualified legal professionals and should be verified by a licensed attorney before use in any legal or procedural context.
-
+You speak in french, english and german, and the references you recieve may be in any of these 3 languages.
 Your knowledge covers the Swiss Civil Code, Code of Obligations, Penal Code, Federal Constitution, administrative procedures, and relevant case law. You may also reference federal and cantonal legal provisions where applicable.
 
 This system uses a **Retrieval-Augmented Generation (RAG)** architecture. Each query is accompanied by one or more **retrieved text chunks**, which may contain excerpts from Swiss laws, regulations, legal doctrine, or official commentary.
+
+{conversation_context}
 
 🟡 **Important usage rules**:
 1. **Always rely primarily on the retrieved context** (text chunks). Quote or paraphrase directly from them whenever possible.
 2. **Cite** the relevant article, paragraph, or source when referring to retrieved content (e.g., *Art. 97 CO*).
 3. If the retrieved context is ambiguous or insufficient to answer the question confidently, say so. Do not hallucinate.
 4. If a question is out of scope (e.g., non-Swiss law, medical, speculative finance), politely explain that you cannot assist.
+5. **Maintain context** from previous messages when relevant to the current question.
 
 Whenever it improves clarity, structure your responses using bullet points, numbered steps, or short sections.
 
@@ -77,13 +102,13 @@ Use a **precise, neutral, and professional tone**, appropriate for written commu
 
 Your name is **LexAI**."""
 
-        # Define the prompt template
+        # Define the prompt template with conversation history support
         self.prompt_template = """{system_prompt}
 
-Context:
+Context from documents:
 {context}
 
-Question: {question}
+Current question: {question}
 
 Answer as LexAI, the Swiss legal expert assistant:"""
         
@@ -91,6 +116,12 @@ Answer as LexAI, the Swiss legal expert assistant:"""
             template=self.prompt_template,
             input_variables=["system_prompt", "context", "question"]
         )
+        
+        # Template for conversation history
+        self.conversation_template = """## Previous conversation (most recent first):
+{history}
+
+## Current conversation:"""
         
         # Initialize the LLM chain with the system prompt included
         self.llm_chain = LLMChain(
@@ -198,44 +229,7 @@ Answer as LexAI, the Swiss legal expert assistant:"""
             
         except Exception as e:
             error_msg = f"Error generating response: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            return f"I'm sorry, I encountered an error while processing your request: {str(e)}"
-    
-    async def ask(self, query: str, top_k: int = 3) -> Dict[str, Any]:
-        """
-        Process a query using RAG.
-        
-        Args:
-            query: The user's question
-            top_k: Number of relevant chunks to retrieve
-            
-        Returns:
-            Dictionary containing the answer and sources
-        """
-        logger.info(f"Processing query in ask(): {query[:100]}...")
-        
-        try:
-            # Get relevant context
-            logger.info(f"Retrieving top {top_k} relevant context chunks...")
-            context = await self.get_relevant_context(query, top_k)
-            
-            if not context:
-                logger.warning("No relevant context found for query")
-                return {
-                    "answer": "I couldn't find any relevant information to answer your question.",
-                    "sources": []
-                }
-            
-            logger.info(f"Found {len(context)} relevant context chunks")
-            
-            # Generate response
-            logger.info("Generating response...")
-            answer = await self.generate_response(query, context)
-            
-            # Extract unique sources
-            sources = list(set([c["source"] for c in context if c.get("source")]))
-            logger.info(f"Response generated with {len(sources)} sources")
-            
+            logger.error(error_msg)
             return {
                 "answer": answer,
                 "sources": sources

@@ -1,18 +1,22 @@
 import asyncio
-from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, status, Request
+import uuid
+from fastapi import (
+    FastAPI, Depends, Header, HTTPException, 
+    UploadFile, File, status, Request, Query
+)
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
-from pydantic import BaseModel, Field, HttpUrl
-from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field, HttpUrl, validator
+from typing import List, Optional, Dict, Any, Union
 import os
 import logging
-import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 import aiofiles
 from redis.asyncio import Redis
+from datetime import timedelta
 
 from langchain.chains import RetrievalQA
 from langchain_community.llms import Ollama
@@ -20,8 +24,9 @@ from langchain_qdrant import Qdrant
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient
 
-# Import RAG service
+# Import RAG service and memory
 from rag_service import RAGService
+from memory import MemoryManager
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +36,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # --------- Configuration ---------
+# Required environment variables
 QDRANT_URL = os.getenv("QDRANT_URL")
 if not QDRANT_URL:
     raise ValueError("QDRANT_URL environment variable is required")
@@ -39,8 +45,17 @@ OLLAMA_URL = os.getenv("OLLAMA_URL")
 if not OLLAMA_URL:
     raise ValueError("OLLAMA_URL environment variable is required")
 
-COLLECTION_NAME = os.getenv("COLLECTION_NAME", "documents")
+# Optional environment variables with defaults
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
+MEMORY_TTL_HOURS = int(os.getenv("MEMORY_TTL_HOURS", "24"))  # Default 24 hours
+MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "10"))  # Default 10 messages
+
+COLLECTION_NAME = os.getenv("COLLECTION_NAME", "rag_collection")
 DOCS_PATH = os.getenv("DOCS_PATH", "/documents")
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Create documents directory if it doesn't exist
 Path(DOCS_PATH).mkdir(parents=True, exist_ok=True)
@@ -49,24 +64,49 @@ Path(DOCS_PATH).mkdir(parents=True, exist_ok=True)
 class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4096, description="The question to ask the RAG system")
     top_k: Optional[int] = Field(3, ge=1, le=30, description="Number of relevant chunks to retrieve (max 30)")
+    session_id: Optional[str] = Field(
+        None, 
+        description="Session ID for maintaining conversation context. If not provided, a new session will be created."
+    )
+    use_memory: Optional[bool] = Field(
+        True, 
+        description="Whether to use conversation memory for this request"
+    )
     
     class Config:
         schema_extra = {
             "example": {
                 "query": "What is the capital of France?",
-                "top_k": 3
+                "top_k": 3,
+                "session_id": "550e8400-e29b-41d4-a716-446655440000",
+                "use_memory": True
             }
         }
+        
+    @validator('session_id')
+    def validate_session_id(cls, v):
+        if v and not (len(v) == 36 and v.count('-') == 4):
+            try:
+                uuid.UUID(v)
+                return v
+            except ValueError:
+                raise ValueError("session_id must be a valid UUID")
+        return v
 
 class RAGResponse(BaseModel):
     answer: str = Field(..., description="The generated answer")
     sources: List[str] = Field(..., description="List of source documents used for the answer")
+    session_id: Optional[str] = Field(
+        None,
+        description="Session ID for maintaining conversation context. A new ID is generated if not provided."
+    )
     
     class Config:
         schema_extra = {
             "example": {
                 "answer": "The capital of France is Paris.",
-                "sources": ["document1.txt", "document2.pdf"]
+                "sources": ["document1.txt", "document2.pdf"],
+                "session_id": "550e8400-e29b-41d4-a716-446655440000"
             }
         }
 
@@ -106,10 +146,35 @@ app = FastAPI(
     openapi_url="/openapi.json"
 )
 
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy"}
+@app.get("/health", status_code=status.HTTP_200_OK)
+async def health():
+    """
+    Health check endpoint.
+    
+    Returns:
+        dict: Status of all services
+    """
+    status = {
+        "status": "ok",
+        "services": {
+            "qdrant": "ok" if rag_service and rag_service.qdrant_client else "error",
+            "ollama": "ok" if rag_service and rag_service.llm else "error",
+            "redis": "ok" if redis_client and rag_service.memory_manager else "disabled",
+            "memory": "enabled" if rag_service and rag_service.memory_manager else "disabled"
+        },
+        "collection": COLLECTION_NAME,
+        "model": rag_service.llm_model if rag_service else None
+    }
+    
+    # Add more detailed status if available
+    try:
+        if rag_service and rag_service.qdrant_client:
+            collections = rag_service.qdrant_client.get_collections()
+            status["collections"] = [c.name for c in collections.collections]
+    except Exception as e:
+        status["services"]["qdrant"] = f"error: {str(e)}"
+    
+    return status
 
 # Configure CORS with more specific settings
 app.add_middleware(
@@ -133,32 +198,53 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-XSS-Protection"] = "1; mode=block"
     return response
 
+# Initialize Redis client
+redis_client = None
+try:
+    redis_client = Redis.from_url(REDIS_URL)
+    logger.info(f"Connected to Redis at {REDIS_URL}")
+except Exception as e:
+    logger.warning(f"Failed to connect to Redis: {str(e)}. Conversation memory will be disabled.")
+    redis_client = None
+
 # Initialize services
 rag_service = None
+memory_manager = MemoryManager(redis_client) if redis_client else None
 
 # Initialize RAG chain on startup
 @app.on_event("startup")
 async def startup_event():
-    global rag_service
+    global rag_service, memory_manager
     
-    # Initialize rate limiter
-    redis = Redis.from_url("redis://redis:6379/0")
-    await FastAPILimiter.init(redis)
-    logger.info("Rate limiter initialized")
-    
-    # Initialize RAG service
     try:
-        # Initialize RAG service with the specified model
+        # Initialize RAG service with memory support
         rag_service = RAGService(
             qdrant_url=QDRANT_URL,
             ollama_url=OLLAMA_URL,
+            redis_client=redis_client,
             collection_name=COLLECTION_NAME,
-            model_name="BAAI/bge-m3",  # Embedding model
-            llm_model=os.getenv('OLLAMA_MODEL', 'mixtral:8x7b')  # LLM model
+            memory_ttl_hours=MEMORY_TTL_HOURS,
+            max_history_messages=MAX_HISTORY_MESSAGES
         )
-        logger.info("RAG service initialized successfully")
+        
+        # Test Qdrant connection
+        collections = rag_service.qdrant_client.get_collections()
+        logger.info(f"Connected to Qdrant. Available collections: {[c.name for c in collections.collections]}")
+        
+        # Test Ollama connection
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: rag_service.llm("Test connection")
+        )
+        logger.info(f"Connected to Ollama at {OLLAMA_URL}")
+        
+        # Initialize rate limiter if Redis is available
+        if redis_client:
+            await FastAPILimiter.init(redis_client)
+            logger.info("Rate limiter initialized with Redis")
+        
     except Exception as e:
-        logger.error(f"Failed to initialize RAG service: {str(e)}")
+        logger.error(f"Failed to initialize services: {str(e)}")
         raise
 
 # --------- Role-based Access ---------
@@ -325,39 +411,48 @@ async def ask_question(
 # Keep the old query endpoint for backward compatibility
 @app.post("/query", response_model=RAGResponse)
 async def query_endpoint(
-    request: dict,
-    role: str = Header("user", description="User role (user, admin)")
+    request: QueryRequest,
+    role: str = Depends(get_role),
+    x_request_id: str = Header(None, description="Optional request ID for tracing")
 ):
     """
-    Query the RAG system with a question.
+    Query the RAG system with a question, with optional conversation memory.
     
-    This is a simplified endpoint that doesn't require the full QueryRequest model.
-    It will automatically add debug logging of the search results.
+    This endpoint supports maintaining conversation context across multiple requests
+    using a session ID. If no session ID is provided, a new conversation will be started.
     
-    Example request:
+    Example request with session:
     ```
     curl -X POST "http://localhost:8000/query" \
          -H "Content-Type: application/json" \
-         -d '{"query": "Your question here"}'
+         -d '{
+           "query": "What is the capital of France?",
+           "session_id": "550e8400-e29b-41d4-a716-446655440000",
+           "use_memory": true,
+           "top_k": 3
+         }'
+    ```
+    
+    Example response:
+    ```json
+    {
+      "answer": "The capital of France is Paris.",
+      "sources": ["document1.pdf", "document2.txt"],
+      "session_id": "550e8400-e29b-41d4-a716-446655440000"
+    }
+    ```
     """
+    logger_extra = {
+        "request_id": x_request_id or str(uuid.uuid4()),
+        "session_id": request.session_id or "new_session",
+        "use_memory": request.use_memory,
+        "top_k": request.top_k
+    }
+    
     try:
-        # Log the raw request
-        logger.info(f"Received request: {request}")
-        
-        # Get query text, supporting both 'question' and 'query' fields for backward compatibility
-        query_text = request.get("query", "") or request.get("question", "")
-        if not query_text:
-            error_msg = "Missing required field 'query' or 'question' in request body"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-            
-        # Log the extracted query text
-        logger.info(f"Extracted query text: {query_text}")
-        
-        # Convert to QueryRequest
-        query_request = QueryRequest(
-            query=query_text,
-            top_k=request.get("top_k", 3)
+        logger.info(
+            f"Query received (session: {request.session_id or 'new'})",
+            extra=logger_extra
         )
         
         # Log the query request
