@@ -213,10 +213,12 @@ Answer as LexAI, the Swiss legal expert assistant:"""
             
             # Format the context into a single string with source attribution
             context_entries = []
+            sources = set()
             for i, c in enumerate(context, 1):
                 source = c.get('source', 'unknown')
                 text = c.get('text', '')
                 context_entries.append(f"--- Source {i} ({source}) ---\n{text}")
+                sources.add(source)
             
             context_str = "\n\n".join(context_entries)
             logger.info(f"Formatted context length: {len(context_str)} characters")
@@ -236,29 +238,55 @@ Answer as LexAI, the Swiss legal expert assistant:"""
             logger.info("Sending request to LLM...")
             try:
                 # Generate the response using the LLM chain with all required variables
-                response = await asyncio.wait_for(
+                answer = await asyncio.wait_for(
                     self.llm_chain.arun(chain_input),
                     timeout=60.0
                 )
                 logger.info("Successfully received response from LLM")
-                return response.strip()
+                
+                return {
+                    "answer": answer.strip(),
+                    "sources": list(sources)
+                }
                 
             except asyncio.TimeoutError:
                 error_msg = "LLM response timed out after 60 seconds"
                 logger.error(error_msg)
-                return "I'm sorry, the request took too long to process. Please try again with a more specific question."
+                return {
+                    "answer": "I'm sorry, the request took too long to process. Please try again with a more specific question.",
+                    "sources": []
+                }
             
         except Exception as e:
             error_msg = f"Error generating response: {str(e)}"
-            logger.error(error_msg)
+            logger.error(error_msg, exc_info=True)
             return {
-                "answer": answer,
-                "sources": sources
+                "answer": f"I'm sorry, I encountered an error while processing your request: {str(e)}",
+                "sources": []
             }
+    
+    async def ask(self, query: str, top_k: int = 3) -> dict:
+        """
+        Process a query by retrieving relevant context and generating a response.
+        
+        Args:
+            query: The user's question
+            top_k: Number of relevant chunks to retrieve
+            
+        Returns:
+            Dictionary containing 'answer' and 'sources'
+        """
+        try:
+            # Get relevant context
+            context = await self.get_relevant_context(query, top_k=top_k)
+            
+            # Generate response
+            response = await self.generate_response(query, context)
+            
+            return response
             
         except Exception as e:
-            error_msg = f"Error in ask(): {str(e)}"
-            logger.error(error_msg, exc_info=True)
+            logger.error(f"Error in ask(): {str(e)}", exc_info=True)
             return {
                 "answer": f"I'm sorry, I encountered an error while processing your request: {str(e)}",
                 "sources": []
