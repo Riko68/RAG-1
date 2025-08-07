@@ -451,14 +451,21 @@ async def query_endpoint(
     }
     
     try:
+        # Generate a new session ID if none is provided
+        session_id = request.session_id or str(uuid.uuid4())
+        
         logger.info(
-            f"Query received (session: {request.session_id or 'new'})",
-            extra=logger_extra
+            f"Query received (session: {session_id})",
+            extra={"request_id": x_request_id or str(uuid.uuid4()), "session_id": session_id}
         )
         
         # Log the query request
         logger.info(f"Processing query: {request.query}")
         logger.info(f"Top K: {request.top_k}")
+        logger.info(f"Using session: {session_id}")
+        
+        # Update the request with the new session ID if it was generated
+        request.session_id = session_id
         
         # Get the RAG service response with timeout
         try:
@@ -466,6 +473,10 @@ async def query_endpoint(
                 ask_question(request, role),
                 timeout=30.0  # 30 second timeout
             )
+            
+            # Ensure the response includes the session ID
+            if isinstance(response, dict):
+                response['session_id'] = session_id
         except asyncio.TimeoutError:
             error_msg = "Query processing timed out after 30 seconds"
             logger.error(error_msg)
