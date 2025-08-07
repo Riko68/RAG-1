@@ -13,15 +13,17 @@ WORKDIR /app
 # Set Python path
 ENV PYTHONPATH=/app
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
-
-# Copy application code
+# Copy application code first to leverage Docker cache
 COPY . .
 
+# Install Python dependencies
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Install the package in development mode
+RUN pip3 install -e .
+
 # Create documents directory if it doesn't exist
-RUN mkdir -p /app/documents
+RUN mkdir -p /app/backend/documents
 
 # Expose the port
 EXPOSE 8000
