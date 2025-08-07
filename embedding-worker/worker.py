@@ -285,29 +285,40 @@ def ensure_collection_exists(collection_name: str, vector_size: int = 1024) -> b
             logger.info(f"Collection '{collection_name}' already exists")
             
             # Check if the collection has the right configuration
-            if (hasattr(collection_info.config.params.vectors, 'size') and 
-                collection_info.config.params.vectors.size != vector_size):
-                logger.warning(f"Collection '{collection_name}' has vector size {collection_info.config.params.vectors.size}, "
-                             f"but {vector_size} was requested. Recreating collection...")
-                client.recreate_collection(
-                    collection_name=collection_name,
-                    vectors_config=VectorParams(
-                        size=vector_size,
-                        distance=Distance.COSINE
-                    )
-                )
-                return True
+            if hasattr(collection_info.config.params.vectors, 'size'):
+                current_size = collection_info.config.params.vectors.size
+                if current_size != vector_size:
+                    logger.warning(f"Collection '{collection_name}' has vector size {current_size}, "
+                                 f"but {vector_size} was requested. Recreating collection...")
+                    try:
+                        # Get all collections to check if we need to delete first
+                        collections = client.get_collections()
+                        collection_names = [col.name for col in collections.collections]
+                        
+                        if collection_name in collection_names:
+                            client.delete_collection(collection_name)
+                            logger.info(f"Deleted existing collection '{collection_name}'")
+                        
+                        # Create new collection with correct size
+                        client.create_collection(
+                            collection_name=collection_name,
+                            vectors_config=VectorParams(
+                                size=vector_size,
+                                distance=Distance.COSINE
+                            )
+                        )
+                        logger.info(f"Successfully recreated collection '{collection_name}' with vector size {vector_size}")
+                        return True
+                    except Exception as recreate_error:
+                        logger.error(f"Failed to recreate collection: {recreate_error}")
+                        return False
+                else:
+                    logger.info(f"Collection '{collection_name}' already has the correct vector size {vector_size}")
+                    return True
                 
-            # Ensure the collection is properly configured with the right vector parameters
-            client.update_collection(
-                collection_name=collection_name,
-                update_set=UpdateCollection(
-                    vectors_config=VectorParams(
-                        size=vector_size,
-                        distance=Distance.COSINE
-                    ).dict()
-                )
-            )
+            # No need to update vector parameters if collection exists with correct size
+            # Vector parameters can't be updated after collection creation
+            logger.info(f"Collection '{collection_name}' exists with correct vector size {vector_size}")
             return True
             
         except Exception as e:
