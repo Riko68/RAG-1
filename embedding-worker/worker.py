@@ -280,9 +280,34 @@ def ensure_collection_exists(collection_name: str, vector_size: int = 1024) -> b
     
     for attempt in range(max_retries):
         try:
-            # Check if collection exists
-            client.get_collection(collection_name)
-            logger.info(f"Collection '{collection_name}' exists and is ready")
+            # Try to get collection info to check if it exists
+            collection_info = client.get_collection(collection_name=collection_name)
+            logger.info(f"Collection '{collection_name}' already exists")
+            
+            # Check if the collection has the right configuration
+            if (hasattr(collection_info.config.params.vectors, 'size') and 
+                collection_info.config.params.vectors.size != vector_size):
+                logger.warning(f"Collection '{collection_name}' has vector size {collection_info.config.params.vectors.size}, "
+                             f"but {vector_size} was requested. Recreating collection...")
+                client.recreate_collection(
+                    collection_name=collection_name,
+                    vectors_config=VectorParams(
+                        size=vector_size,
+                        distance=Distance.COSINE
+                    )
+                )
+                return True
+                
+            # Ensure the collection is properly configured with the right vector parameters
+            client.update_collection(
+                collection_name=collection_name,
+                update_set=UpdateCollection(
+                    vectors_config=VectorParams(
+                        size=vector_size,
+                        distance=Distance.COSINE
+                    ).dict()
+                )
+            )
             return True
             
         except Exception as e:
