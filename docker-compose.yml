@@ -25,9 +25,13 @@ services:
     build: ./embedding-worker
     volumes:
       - ./documents:/documents
+      - ./uploads:/uploads
+      - ./processed:/processed
     environment:
       - QDRANT_URL=http://qdrant:6333
       - DOCS_PATH=/documents
+      - UPLOAD_DIR=/uploads
+      - PROCESSED_DIR=/processed
     depends_on:
       - qdrant
     networks:
