@@ -107,6 +107,45 @@ class DocumentProcessor:
         self.min_chunk_size = chunk_size // 4
         self.max_chunk_size = chunk_size * 2
         
+    def _detect_language(self, text: str) -> str:
+        """Detect the language of the given text.
+        
+        Args:
+            text: The text to analyze
+            
+        Returns:
+            str: Language code ('en', 'fr', 'de', etc.)
+        """
+        try:
+            # Simple word-based detection as a fallback
+            text_lower = text.lower()
+            
+            # Check for common words in different languages
+            en_words = {' the ', ' and ', ' for ', ' that ', ' with ', ' this '}
+            fr_words = {' le ', ' la ', ' et ', ' des ', ' les ', ' dans '}
+            de_words = {' der ', ' die ', ' und ', ' den ', ' das ', ' zu '}
+            
+            # Count matches for each language
+            en_count = sum(1 for word in en_words if word in text_lower)
+            fr_count = sum(1 for word in fr_words if word in text_lower)
+            de_count = sum(1 for word in de_words if word in text_lower)
+            
+            # Return language with highest count, default to English
+            max_count = max(en_count, fr_count, de_count)
+            if max_count == 0:
+                return self.default_lang
+                
+            if max_count == en_count:
+                return 'en'
+            elif max_count == fr_count:
+                return 'fr'
+            else:
+                return 'de'
+                
+        except Exception as e:
+            logger.warning(f"Error in language detection: {e}")
+            return self.default_lang
+            
     def process_file(self, filepath: str) -> List[DocumentChunk]:
         """Process a file and return its chunks with metadata.
         

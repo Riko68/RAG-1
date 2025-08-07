@@ -265,45 +265,67 @@ def get_file_id(filepath, chunk_idx):
     # Generate a hash and convert to integer (first 8 bytes)
     return int(hashlib.md5(unique_str.encode()).hexdigest()[:8], 16) % (10**8)
 
-def ensure_collection_exists(collection_name, vector_size=1024):
-    """Ensure the Qdrant collection exists with proper configuration"""
-    from qdrant_client.models import Distance, VectorParams
+def ensure_collection_exists(collection_name: str, vector_size: int = 1024) -> bool:
+    """Ensure the Qdrant collection exists with proper configuration.
     
-    try:
-        # Check if collection exists
-        collections = client.get_collections().collections
-        collection_names = [c.name for c in collections]
+    Args:
+        collection_name: Name of the collection to check/create
+        vector_size: Size of the vectors to be stored in the collection
         
-        if collection_name not in collection_names:
-            print(f"Creating new collection: {collection_name}")
+    Returns:
+        bool: True if collection exists or was created successfully, False otherwise
+    """
+    max_retries = 3
+    retry_delay = 2  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            # Check if collection exists
+            client.get_collection(collection_name)
+            logger.info(f"Collection '{collection_name}' exists and is ready")
+            return True
             
-            # Create collection with optimized settings
-            client.create_collection(
-                collection_name=collection_name,
-                vectors_config=VectorParams(
-                    size=vector_size,
-                    distance=Distance.COSINE
-                ),
-                optimizers_config={
-                    'indexing_threshold': 0,  # Index all vectors
-                    'memmap_threshold': 20000,
-                    'default_segment_number': 1,
-                    'max_optimization_threads': 4
-                },
-                hnsw_config={
-                    'm': 16,
-                    'ef_construct': 100,
-                    'full_scan_threshold': 10,
-                    'on_disk': False
-                }
-            )
-            print(f"Successfully created collection: {collection_name}")
-        else:
-            print(f"Using existing collection: {collection_name}")
-            
-    except Exception as e:
-        print(f"Error managing collection: {str(e)}")
-        raise
+        except Exception as e:
+            if "not found" in str(e).lower() or "doesn't exist" in str(e).lower():
+                # Collection doesn't exist, try to create it
+                logger.info(f"Collection '{collection_name}' not found, attempting to create it (attempt {attempt + 1}/{max_retries})...")
+                try:
+                    client.create_collection(
+                        collection_name=collection_name,
+                        vectors_config=VectorParams(
+                            size=vector_size,
+                            distance=Distance.COSINE
+                        ),
+                        optimizers_config=OptimizersConfig(
+                            max_segment_size=10000,
+                            memmap_threshold=20000,
+                            indexing_threshold=20000
+                        ),
+                        hnsw_config=HnswConfig(
+                            m=16,
+                            ef_construct=100,
+                            full_scan_threshold=10000
+                        )
+                    )
+                    logger.info(f"Successfully created collection '{collection_name}' with vector size {vector_size}")
+                    return True
+                    
+                except Exception as create_error:
+                    logger.warning(f"Attempt {attempt + 1} failed to create collection: {create_error}")
+                    if attempt == max_retries - 1:
+                        logger.error(f"Failed to create collection '{collection_name}' after {max_retries} attempts")
+                        return False
+                    time.sleep(retry_delay)
+                    
+            else:
+                # Other error (e.g., connection issue)
+                logger.warning(f"Error checking collection '{collection_name}': {e}")
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to verify collection after {max_retries} attempts: {e}")
+                    return False
+                time.sleep(retry_delay)
+    
+    return False
 
 def get_indexed_files(collection_name="rag_collection"):
     """Get a dictionary of indexed files and their latest modification timestamps"""
@@ -385,68 +407,51 @@ def index_document(filepath: str, collection_name: str = "rag_collection") -> bo
     global is_indexing, current_file, processed_files, total_files, last_error
     
     if not os.path.exists(filepath):
-        last_error = f"File not found: {filepath}"
-        logger.error(last_error)
-        return
+        logger.error(f"File not found: {filepath}")
+        return False
+        
+    file_size = os.path.getsize(filepath) / (1024 * 1024)  # Size in MB
+    file_ext = os.path.splitext(filepath)[1].lower()
     
+    # Skip unsupported or suspiciously large files
+    if file_ext not in DocumentHandler.SUPPORTED_EXTENSIONS:
+        logger.warning(f"Skipping unsupported file type: {filepath}")
+        return False
+        
+    if file_size > 100:  # Skip files larger than 100MB
+        logger.warning(f"Skipping large file ({file_size:.1f}MB): {filepath}")
+        return False
+    
+    # Ensure collection exists before processing
+    if not ensure_collection_exists(collection_name, vector_size=1024):
+        logger.error(f"Failed to ensure collection '{collection_name}' exists")
+        return False
+        
     try:
         is_indexing = True
         current_file = filepath
-        logger.info(f"Processing document: {filepath}")
         
-        # Process the document using DocumentProcessor
+        # Process the document
+        logger.info(f"Processing document: {filepath}")
         chunks = document_processor.process_file(filepath)
         
+        if not chunks:
+            logger.warning(f"No content extracted from: {filepath}")
+            return False
+            
         # Process chunks into Qdrant points
         points, num_chunks = process_document_chunks(chunks, filepath)
         
         if not points:
-            logger.warning(f"No valid chunks generated from {filepath}")
-            return
-        
+            logger.error(f"Failed to create points for: {filepath}")
+            return False
+            
         # Delete existing points for this file
         delete_file_from_index(filepath, collection_name)
         
-        # Ensure collection exists with the correct vector size
-        vector_size = len(points[0].vector) if points else 1024
-        ensure_collection_exists(collection_name, vector_size)
+        # Upload to Qdrant
+        logger.info(f"Uploading {num_chunks} chunks from {filepath} to Qdrant")
         
-        # Process points in chunks to avoid timeouts
-        max_retries = 3
-        chunk_size = 50  # Process points in smaller chunks for reliability
-        
-        logger.info(f"Processing {len(points)} points in chunks of {chunk_size}")
-        
-        for i in range(0, len(points), chunk_size):
-            chunk_points = points[i:i + chunk_size]
-            
-            for attempt in range(max_retries):
-                try:
-                    # Upsert the chunk of points
-                    client.upsert(
-                        collection_name=collection_name,
-                        points=chunk_points,
-                        wait=True
-                    )
-                    logger.info(f"Successfully indexed chunk {i//chunk_size + 1}/{(len(points)-1)//chunk_size + 1}")
-                    break
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        raise
-                    logger.warning(f"Attempt {attempt + 1} failed, retrying: {str(e)}")
-                    time.sleep(1)  # Wait before retry
-        
-        processed_files += 1
-        logger.info(f"Successfully indexed {num_chunks} chunks from {filepath}")
-        
-    except Exception as e:
-        last_error = f"Error processing {filepath}: {str(e)}"
-        logger.error(last_error, exc_info=True)
-        raise
-    finally:
-        current_file = None
-        is_indexing = False
-                
         # Process points in chunks to avoid timeouts
         max_retries = 3
         chunk_size = 50  # Process points in smaller chunks for reliability
@@ -475,6 +480,16 @@ def index_document(filepath: str, collection_name: str = "rag_collection") -> bo
         processed_files += 1
         total_files = max(total_files, processed_files)
         logger.info(f"Successfully indexed {num_chunks} chunks from {filepath}")
+        return True
+        
+    except Exception as e:
+        last_error = str(e)
+        logger.error(f"Error processing {filepath}: {last_error}", exc_info=True)
+        return False
+        
+    finally:
+        current_file = None
+        is_indexing = False
 
 class DocumentHandler(FileSystemEventHandler):
     """Handles file system events for document processing."""
