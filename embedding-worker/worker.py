@@ -3,6 +3,7 @@ import time
 import threading
 import uvicorn
 import hashlib
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -257,7 +258,74 @@ def ensure_collection_exists(collection_name, vector_size=1024):
         print(f"Error managing collection: {str(e)}")
         raise
 
-def index_document(filepath):
+def get_indexed_files(collection_name="rag_collection"):
+    """Get a dictionary of indexed files and their latest modification timestamps"""
+    try:
+        # Get all points with their full_path and timestamp payloads
+        points, _ = client.scroll(
+            collection_name=collection_name,
+            with_payload=["full_path", "timestamp"],
+            limit=10000,  # Adjust based on your expected number of files
+            with_vectors=False
+        )
+        
+        # Track the latest timestamp for each file
+        file_timestamps = {}
+        for point in points:
+            filepath = point.payload.get("full_path")
+            timestamp = point.payload.get("timestamp", 0)
+            
+            # Keep the latest timestamp for each file
+            if filepath and (filepath not in file_timestamps or timestamp > file_timestamps[filepath]):
+                file_timestamps[filepath] = timestamp
+                
+        return file_timestamps
+        
+    except Exception as e:
+        print(f"Error getting indexed files: {str(e)}")
+        return {}
+
+def needs_reindex(filepath, indexed_files):
+    """Check if a file needs to be reindexed"""
+    if not os.path.exists(filepath):
+        return False  # File no longer exists
+        
+    if filepath not in indexed_files:
+        return True  # New file, needs indexing
+        
+    try:
+        # Check if file has been modified since last index
+        file_mtime = int(os.path.getmtime(filepath))
+        last_indexed = indexed_files[filepath]
+        return file_mtime > last_indexed
+    except (OSError, KeyError) as e:
+        print(f"Error checking file {filepath}: {str(e)}")
+        return True
+
+def delete_file_from_index(filepath, collection_name="rag_collection"):
+    """Delete all chunks for a file from the index"""
+    try:
+        # Delete all points with the matching full_path
+        client.delete(
+            collection_name=collection_name,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="full_path",
+                            match=models.MatchValue(value=filepath)
+                        )
+                    ]
+                )
+            )
+        )
+        print(f"Deleted all chunks for {filepath} from index")
+        return True
+    except Exception as e:
+        print(f"Error deleting {filepath} from index: {str(e)}")
+        return False
+
+def index_document(filepath, collection_name="rag_collection"):
     global is_indexing, current_file, processed_files, total_files, last_error
     
     # Initialize state
@@ -318,6 +386,9 @@ def index_document(filepath):
             }
             points.append(point)
             print(f"Created point {i+1}/{len(chunks)} with vector size {len(emb)}")
+        
+        # First, delete existing chunks for this file if they exist
+        delete_file_from_index(filepath, collection_name)
         
         # Upload points to Qdrant with retries
         max_retries = 3
@@ -478,18 +549,55 @@ if __name__ == "__main__":
     # Default behavior: start file watcher and index existing files
     print(f"Starting document indexer in {DOCS_PATH}...")
     
-    # On startup, index all existing docs
-    files = [f for f in os.listdir(DOCS_PATH) 
-             if os.path.isfile(os.path.join(DOCS_PATH, f)) 
-             and f.lower().endswith(('.txt', '.md'))]
+    # Get list of currently indexed files with their timestamps
+    print("Checking for indexed files in Qdrant...")
+    indexed_files = get_indexed_files()
+    print(f"Found {len(indexed_files)} files in the index")
     
-    total_files = len(files)
+    # Get list of files in documents directory
+    doc_path = Path(DOCS_PATH)
+    all_files = [f for f in doc_path.glob('**/*') if f.is_file() and f.suffix.lower() in ('.txt', '.md')]
+    
+    # Find files that need indexing (new or modified)
+    files_to_index = [
+        str(f) for f in all_files 
+        if needs_reindex(str(f), indexed_files)
+    ]
+    
+    # Find files that were deleted but still in the index
+    indexed_file_paths = set(indexed_files.keys())
+    current_file_paths = {str(f) for f in all_files}
+    deleted_files = indexed_file_paths - current_file_paths
+    
+    # Clean up deleted files from the index
+    for deleted_file in deleted_files:
+        print(f"File deleted, removing from index: {deleted_file}")
+        delete_file_from_index(deleted_file)
+    
+    total_files = len(files_to_index)
     processed_files = 0
     
-    for fname in files:
-        fpath = os.path.join(DOCS_PATH, fname)
-        if os.path.isfile(fpath):
+    if total_files > 0:
+        print(f"Found {total_files} files to index (new or modified)")
+        
+        # Index files that need it
+        for fpath in files_to_index:
             index_document(fpath)
+    else:
+        print("No files need indexing - all files are up to date")
+    
+    # Clean up any empty collections that might exist
+    try:
+        collections = client.get_collections()
+        for collection in collections.collections:
+            if collection.name != "rag_collection":
+                try:
+                    client.delete_collection(collection.name)
+                    print(f"Cleaned up unused collection: {collection.name}")
+                except Exception as e:
+                    print(f"Error cleaning up collection {collection.name}: {str(e)}")
+    except Exception as e:
+        print(f"Error checking collections: {str(e)}")
     
     # Watch for new files
     event_handler = DocumentHandler()
