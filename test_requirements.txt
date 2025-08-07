@@ -1,2 +1,29 @@
-aiohttp>=3.8.0
-asyncio>=3.4.3
+# Test framework
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+pytest-xdist>=3.0.0
+
+# Test utilities
+freezegun>=1.2.0
+responses>=0.23.0
+httpx>=0.23.0
+
+# Dependencies needed for test_document_processing.py
+langchain>=0.0.300
+pypdf>=3.0.0
+python-docx>=0.8.11
+python-magic>=0.4.27
+sentence-transformers>=2.2.2
+spacy>=3.6.0
+
+# Type checking
+mypy>=1.0.0
+types-requests>=2.28.0
+types-python-dateutil>=2.8.0
+
+# Linting
+flake8>=6.0.0
+black>=23.0.0
+isort>=5.12.0
