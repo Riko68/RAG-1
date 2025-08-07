@@ -79,6 +79,10 @@ services:
       - DOCS_PATH=/documents
       - HOST=0.0.0.0
       - PORT=8000
+      # Memory Configuration
+      - REDIS_URL=redis://redis:6379
+      - MEMORY_TTL_HOURS=24
+      - MAX_HISTORY_MESSAGES=20
     volumes:
       - ./documents:/documents
     depends_on:
