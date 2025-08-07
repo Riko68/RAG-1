@@ -37,12 +37,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Clean up
     && rm -rf /var/lib/apt/lists/*
 
+# Update pip and setuptools first
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
 # Install Python packages
 COPY requirements.txt .
 
-# Install requirements
-RUN pip install --no-cache-dir uvicorn==0.15.0 && \
-    pip install --no-cache-dir -r requirements.txt && \
+# Install requirements with specific versions and trusted hosts
+RUN pip install --no-cache-dir \
+    --trusted-host pypi.org \
+    --trusted-host files.pythonhosted.org \
+    uvicorn==0.15.0 && \
+    pip install --no-cache-dir \
+    --trusted-host pypi.org \
+    --trusted-host files.pythonhosted.org \
+    -r requirements.txt && \
     # Install spacy models
     python -m spacy download en_core_web_md && \
     python -m spacy download fr_core_news_md && \
