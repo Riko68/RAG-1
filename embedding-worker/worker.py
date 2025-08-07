@@ -34,10 +34,15 @@ logger = logging.getLogger(__name__)
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
 DOCS_PATH = os.environ.get("DOCS_PATH", "/documents")
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/uploads")
+PROCESSED_DIR = os.environ.get("PROCESSED_DIR", "/processed")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "BAAI/bge-m3")
 STATUS_PORT = int(os.environ.get("STATUS_PORT", "8001"))
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1000"))
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "200"))
+
+# Ensure processed directory exists
+os.makedirs(PROCESSED_DIR, exist_ok=True)
 
 # Initialize clients and processors
 client = QdrantClient(url=QDRANT_URL)
@@ -367,12 +372,15 @@ def delete_file_from_index(filepath, collection_name="rag_collection"):
         print(f"Error deleting {filepath} from index: {str(e)}")
         return False
 
-def index_document(filepath: str, collection_name: str = "rag_collection") -> None:
+def index_document(filepath: str, collection_name: str = "rag_collection") -> bool:
     """Index a single document file with enhanced processing.
     
     Args:
         filepath: Path to the document to index
         collection_name: Name of the Qdrant collection
+        
+    Returns:
+        bool: True if indexing was successful, False otherwise
     """
     global is_indexing, current_file, processed_files, total_files, last_error
     
@@ -486,7 +494,7 @@ class DocumentHandler(FileSystemEventHandler):
     }
     
     def on_created(self, event):
-        """Handle file creation events."""
+        """Handle file creation events in both upload and documents directories."""
         if event.is_directory:
             return
             
@@ -501,10 +509,36 @@ class DocumentHandler(FileSystemEventHandler):
                     return
                     
                 logger.info(f"Detected new file: {filepath}")
-                index_document(filepath)
+                
+                # If file is in uploads, process and move it
+                if filepath.startswith(UPLOAD_DIR):
+                    if index_document(filepath):
+                        self._move_to_processed(filepath)
+                else:
+                    # Process files in documents directory without moving
+                    index_document(filepath)
                 
             except Exception as e:
                 logger.error(f"Error processing {filepath}: {str(e)}", exc_info=True)
+    
+    def _move_to_processed(self, filepath):
+        """Move a file from uploads to processed directory."""
+        try:
+            # Create relative path to preserve directory structure
+            rel_path = os.path.relpath(filepath, UPLOAD_DIR)
+            dest_path = os.path.join(PROCESSED_DIR, rel_path)
+            
+            # Create destination directory if it doesn't exist
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            
+            # Move the file
+            os.rename(filepath, dest_path)
+            logger.info(f"Moved processed file to: {dest_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error moving file {filepath} to processed: {str(e)}")
+            return False
     
     def _is_file_ready(self, filepath, max_attempts=5, delay=1):
         """Check if a file is ready to be processed."""
@@ -589,9 +623,16 @@ if __name__ == "__main__":
     indexed_files = get_indexed_files()
     print(f"Found {len(indexed_files)} files in the index")
     
-    # Get list of files in documents directory
+    # Get list of files in both documents and uploads directories
     doc_path = Path(DOCS_PATH)
-    all_files = [f for f in doc_path.glob('**/*') if f.is_file() and f.suffix.lower() in ('.txt', '.md')]
+    upload_path = Path(UPLOAD_DIR)
+    
+    # Get files from documents directory
+    all_files = [f for f in doc_path.glob('**/*') if f.is_file() and f.suffix.lower() in DocumentHandler.SUPPORTED_EXTENSIONS]
+    
+    # Get files from uploads directory
+    if upload_path.exists():
+        all_files.extend([f for f in upload_path.glob('**/*') if f.is_file() and f.suffix.lower() in DocumentHandler.SUPPORTED_EXTENSIONS])
     
     # Find files that need indexing (new or modified)
     files_to_index = [
@@ -634,10 +675,19 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error checking collections: {str(e)}")
     
-    # Watch for new files
+    # Watch for new files in both directories
     event_handler = DocumentHandler()
     observer = Observer()
+    
+    # Watch documents directory
     observer.schedule(event_handler, DOCS_PATH, recursive=True)
+    
+    # Watch uploads directory if it exists
+    if os.path.exists(UPLOAD_DIR):
+        observer.schedule(event_handler, UPLOAD_DIR, recursive=True)
+    else:
+        logger.warning(f"Upload directory not found: {UPLOAD_DIR}")
+        
     observer.start()
     
     print(f"Watching {DOCS_PATH} for new documents...")
