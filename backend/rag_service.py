@@ -57,15 +57,36 @@ class RAGService:
         # Initialize embedding model
         self.embeddings = HuggingFaceEmbeddings(model_name=model_name)
         
-        # Initialize LLM
-        logger.info(f"Initializing Ollama with model: {self.llm_model}")
-        self.llm = Ollama(
-            base_url=ollama_url,
-            model=self.llm_model,
-            temperature=0.1,
-            num_ctx=4096,  # Context window size
-            timeout=60.0  # Increase timeout for larger models
-        )
+        # Initialize LLM with retry logic
+        max_retries = 5
+        retry_delay = 10  # seconds
+        self.llm = None
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Initializing Ollama with model: {self.llm_model} (Attempt {attempt + 1}/{max_retries})")
+                self.llm = Ollama(
+                    base_url=ollama_url,
+                    model=self.llm_model,
+                    temperature=0.1,
+                    num_ctx=4096,  # Context window size
+                    timeout=60.0 * (attempt + 1)  # Increase timeout with each attempt
+                )
+                # Test the connection
+                self.llm("Test connection")
+                logger.info("Successfully connected to Ollama")
+                break
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to initialize Ollama after {max_retries} attempts: {str(e)}")
+                    logger.warning("Ollama service is not available. Some features may be limited.")
+                else:
+                    logger.warning(f"Attempt {attempt + 1} failed: {str(e)}. Retrying in {retry_delay} seconds...")
+                    import time
+                    time.sleep(retry_delay)
+        
+        if self.llm is None:
+            logger.error("Could not initialize Ollama. The service will start in limited functionality mode.")
         
         # Initialize memory management if Redis is available
         self.memory_manager = None
