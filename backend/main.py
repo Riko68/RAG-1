@@ -395,7 +395,8 @@ async def ask_question(
         # Get response from RAG service
         response = await rag_service.ask(
             query=query.query,
-            top_k=query.top_k
+            top_k=query.top_k,
+            session_id=query.session_id
         )
         
         logger.info(f"Successfully generated response for question: {query.query}")

@@ -265,16 +265,17 @@ Answer as LexAI, the Swiss legal expert assistant:"""
                 "sources": []
             }
     
-    async def ask(self, query: str, top_k: int = 3) -> dict:
+    async def ask(self, query: str, top_k: int = 3, session_id: str = None) -> dict:
         """
         Process a query by retrieving relevant context and generating a response.
         
         Args:
             query: The user's question
             top_k: Number of relevant chunks to retrieve
+            session_id: Optional session ID for conversation history
             
         Returns:
-            Dictionary containing 'answer' and 'sources'
+            Dictionary containing 'answer', 'sources', and 'session_id'
         """
         try:
             # Get relevant context
@@ -283,11 +284,16 @@ Answer as LexAI, the Swiss legal expert assistant:"""
             # Generate response
             response = await self.generate_response(query, context)
             
+            # Add session_id to the response if provided
+            if session_id:
+                response['session_id'] = session_id
+            
             return response
             
         except Exception as e:
             logger.error(f"Error in ask(): {str(e)}", exc_info=True)
             return {
                 "answer": f"I'm sorry, I encountered an error while processing your request: {str(e)}",
-                "sources": []
+                "sources": [],
+                "session_id": session_id
             }
