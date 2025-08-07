@@ -10,20 +10,17 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Set Python path
-ENV PYTHONPATH=/app
-
-# Copy application code first to leverage Docker cache
-COPY . .
+# Copy requirements first for better caching
+COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Install the package in development mode
-RUN pip3 install -e .
+# Copy application code
+COPY . .
 
 # Create documents directory if it doesn't exist
-RUN mkdir -p /app/backend/documents
+RUN mkdir -p /app/documents
 
 # Expose the port
 EXPOSE 8000
