@@ -456,13 +456,13 @@ async def query_endpoint(
         )
         
         # Log the query request
-        logger.info(f"Processing query: {query_request.query}")
-        logger.info(f"Top K: {query_request.top_k}")
+        logger.info(f"Processing query: {request.query}")
+        logger.info(f"Top K: {request.top_k}")
         
         # Get the RAG service response with timeout
         try:
             response = await asyncio.wait_for(
-                ask_question(query_request, role),
+                ask_question(request, role),
                 timeout=30.0  # 30 second timeout
             )
         except asyncio.TimeoutError:
@@ -478,7 +478,7 @@ async def query_endpoint(
             response = response.dict()
         
         # Log the results for debugging
-        logger.info(f"Successfully processed query: {query_request.query}")
+        logger.info(f"Successfully processed query: {request.query}")
         if isinstance(response, dict):
             answer = response.get('answer', 'No answer found')
             logger.info(f"Answer length: {len(answer)} characters")
