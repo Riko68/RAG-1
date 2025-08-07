@@ -38,10 +38,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python packages
 COPY requirements.txt .
-RUN pip install --no-cache-dir uvicorn==0.15.0 && \
+
+# Install sentencepiece from a pre-built wheel first
+RUN pip install --no-cache-dir --only-binary=:sentencepiece: sentencepiece==0.1.98 && \
+    pip install --no-cache-dir uvicorn==0.15.0 && \
     pip install --no-cache-dir -r requirements.txt && \
-    # Install spacy model
-    python -m spacy download en_core_web_sm
+    # Install spacy models
+    python -m spacy download en_core_web_md && \
+    python -m spacy download fr_core_news_md && \
+    python -m spacy download de_core_news_md
 
 # Copy the application
 COPY . .
