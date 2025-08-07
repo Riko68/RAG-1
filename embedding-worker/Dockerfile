@@ -6,14 +6,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     pkg-config \
     git \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Build sentencepiece from source
-RUN pip install --no-cache-dir cmake && \
-    git clone --depth 1 --branch v0.1.98 https://github.com/google/sentencepiece.git /tmp/sentencepiece && \
+# Install newer CMake
+RUN wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /etc/apt/trusted.gpg.d/kitware.gpg >/dev/null && \
+    echo 'deb https://apt.kitware.com/ubuntu/ focal main' > /etc/apt/sources.list.d/kitware.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends cmake && \
+    rm -rf /var/lib/apt/lists/*
+
+# Build sentencepiece from source (using a more recent version)
+RUN git clone --depth 1 --branch v0.1.99 https://github.com/google/sentencepiece.git /tmp/sentencepiece && \
     mkdir -p /tmp/sentencepiece/build && \
     cd /tmp/sentencepiece/build && \
-    cmake .. && \
+    cmake .. -DSPM_BUILD_TEST=OFF -DSPM_ENABLE_SHARED=ON && \
     make -j $(nproc) && \
     make install && \
     ldconfig
