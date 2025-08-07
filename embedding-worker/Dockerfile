@@ -51,11 +51,15 @@ RUN pip install --no-cache-dir \
     pip install --no-cache-dir \
     --trusted-host pypi.org \
     --trusted-host files.pythonhosted.org \
-    -r requirements.txt && \
-    # Install spacy models
-    python -m spacy download en_core_web_md && \
-    python -m spacy download fr_core_news_md && \
-    python -m spacy download de_core_news_md
+    -r requirements.txt
+
+# Install spacy models from direct URLs in requirements.txt
+# The models are already downloaded as part of the requirements installation
+# We just need to link them
+RUN python -m spacy link --force en_core_web_md en_core_web_md && \
+    python -m spacy link --force fr_core_news_md fr_core_news_md && \
+    python -m spacy link --force de_core_news_md de_core_news_md && \
+    python -m spacy link --force en_core_web_sm en_core_web_sm
 
 # Copy the application
 COPY . .
