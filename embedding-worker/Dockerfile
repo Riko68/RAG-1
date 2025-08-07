@@ -6,12 +6,23 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \
+    # For PDF processing
+    poppler-utils \
+    # For python-magic
+    libmagic1 \
+    # For text processing
+    libxml2-dev \
+    libxslt1-dev \
+    # For compiling C extensions
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python packages one by one to ensure they're installed
+# Install Python packages
 COPY requirements.txt .
 RUN pip install --no-cache-dir uvicorn==0.15.0 && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt && \
+    # Install spacy model
+    python -m spacy download en_core_web_sm
 
 # Copy the application
 COPY . .

@@ -3,8 +3,9 @@ import time
 import threading
 import uvicorn
 import hashlib
+import logging
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from qdrant_client import QdrantClient
@@ -14,21 +15,37 @@ from qdrant_client.http.models import (
     CollectionStatus, UpdateStatus, CollectionInfo,
     VectorsConfig, OptimizersConfig, HnswConfig,
     OptimizersConfigDiff, HnswConfigDiff, UpdateCollection,
-    CollectionParams
+    CollectionParams, Filter, FieldCondition, MatchValue
 )
 from sentence_transformers import SentenceTransformer
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from pydantic import BaseModel
 
+# Import the document processor
+from document_processor import DocumentProcessor, DocumentChunk
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
 DOCS_PATH = os.environ.get("DOCS_PATH", "/documents")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "BAAI/bge-m3")
 STATUS_PORT = int(os.environ.get("STATUS_PORT", "8001"))
+CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1000"))
+CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "200"))
 
-# Initialize clients
+# Initialize clients and processors
 client = QdrantClient(url=QDRANT_URL)
 model = SentenceTransformer(EMBEDDING_MODEL)
+document_processor = DocumentProcessor(
+    chunk_size=CHUNK_SIZE,
+    chunk_overlap=CHUNK_OVERLAP
+)
 
 # FastAPI app for status endpoint
 app = FastAPI(
@@ -148,66 +165,91 @@ def run_status_server():
     server = uvicorn.Server(config)
     server.run()
 
-def chunk_text(text, chunk_size=500, overlap=100):
-    # Simple word-based chunking
-    words = text.split()
-    chunks = []
-    for i in range(0, len(words), chunk_size - overlap):
-        chunk = " ".join(words[i:i+chunk_size])
-        if chunk:
-            chunks.append(chunk)
-    return chunks
+def process_document_chunks(chunks: List[DocumentChunk], filepath: str) -> Tuple[List[PointStruct], int]:
+    """Process document chunks into Qdrant points.
+    
+    Args:
+        chunks: List of DocumentChunk objects
+        filepath: Path to the source file
+        
+    Returns:
+        Tuple of (points, number of chunks)
+    """
+    points = []
+    
+    for i, chunk in enumerate(chunks):
+        try:
+            # Generate embedding for the chunk
+            embedding = model.encode(chunk.text, normalize_embeddings=True).tolist()
+            
+            # Create a point for Qdrant
+            point_id = get_file_id(filepath, i)
+            
+            # Prepare metadata
+            metadata = chunk.metadata.copy()
+            metadata.update({
+                'chunk_id': i,
+                'file_modified': int(os.path.getmtime(filepath)),
+                'processed_at': int(time.time())
+            })
+            
+            point = PointStruct(
+                id=point_id,
+                vector=embedding,
+                payload=metadata
+            )
+            points.append(point)
+            
+        except Exception as e:
+            logger.error(f"Error processing chunk {i} of {filepath}: {str(e)}")
+            continue
+    
+    return points, len(chunks)
 
-def query_embeddings(query_text, collection_name="rag_collection", limit=5):
+def query_embeddings(query_text: str, collection_name: str = "rag_collection", limit: int = 5) -> List[Dict[str, Any]]:
     """
     Query the Qdrant collection for documents similar to the query text.
     
     Args:
-        query_text (str): The text to find similar documents for
-        collection_name (str): Name of the Qdrant collection to search in
-        limit (int): Maximum number of results to return
+        query_text: The text to find similar documents for
+        collection_name: Name of the Qdrant collection to search in
+        limit: Maximum number of results to return
         
     Returns:
-        list: List of matching documents with their scores and metadata
+        List of matching documents with their scores and metadata
     """
     try:
-        print(f"\n🔍 Searching for: '{query_text}'")
-        
         # Generate embedding for the query
-        query_embedding = model.encode(query_text).tolist()
+        query_embedding = model.encode(query_text, normalize_embeddings=True).tolist()
         
-        # Search in Qdrant
+        # Search the collection
         search_results = client.search(
             collection_name=collection_name,
             query_vector=query_embedding,
             limit=limit,
+            with_vectors=False,
             with_payload=True,
-            with_vectors=False
+            score_threshold=0.3  # Lower threshold for better recall
         )
         
-        # Process and format results
+        # Format results
         results = []
-        for i, hit in enumerate(search_results, 1):
-            result = {
-                'rank': i,
+        for i, hit in enumerate(search_results):
+            payload = hit.payload or {}
+            results.append({
+                'rank': i + 1,
                 'score': hit.score,
-                'source': hit.payload.get('source', 'Unknown'),
-                'text': hit.payload.get('text', '')[:200] + '...',  # Show first 200 chars
-                'chunk_id': hit.payload.get('chunk_id', -1),
-                'full_path': hit.payload.get('full_path', '')
-            }
-            results.append(result)
-            
-            # Print result summary
-            print(f"\n📄 Result {i} (Score: {hit.score:.4f})")
-            print(f"📂 Source: {result['source']}")
-            print(f"🔗 Path: {result['full_path']}")
-            print(f"📝 Text: {result['text']}")
+                'source': payload.get('source', 'unknown'),
+                'text': payload.get('text', ''),
+                'chunk_id': payload.get('chunk_id', -1),
+                'full_path': payload.get('full_path', ''),
+                'chunk_type': payload.get('chunk_type', 'text')
+            })
         
         return results
         
     except Exception as e:
-        print(f"❌ Error querying embeddings: {str(e)}")
+        logger.error(f"Error querying embeddings: {str(e)}")
         raise
 
 def get_file_id(filepath, chunk_idx):
@@ -325,166 +367,159 @@ def delete_file_from_index(filepath, collection_name="rag_collection"):
         print(f"Error deleting {filepath} from index: {str(e)}")
         return False
 
-def index_document(filepath, collection_name="rag_collection"):
+def index_document(filepath: str, collection_name: str = "rag_collection") -> None:
+    """Index a single document file with enhanced processing.
+    
+    Args:
+        filepath: Path to the document to index
+        collection_name: Name of the Qdrant collection
+    """
     global is_indexing, current_file, processed_files, total_files, last_error
     
-    # Initialize state
-    last_error = None
-    is_indexing = True
-    current_file = os.path.basename(filepath)
+    if not os.path.exists(filepath):
+        last_error = f"File not found: {filepath}"
+        logger.error(last_error)
+        return
     
     try:
-        # Read and process the file
-        print(f"Indexing {filepath}...")
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            text = f.read()
+        is_indexing = True
+        current_file = filepath
+        logger.info(f"Processing document: {filepath}")
         
-        # Generate chunks from the text
-        chunks = chunk_text(text)
+        # Process the document using DocumentProcessor
+        chunks = document_processor.process_file(filepath)
         
-        # Skip empty files or files that couldn't be chunked
-        if not chunks or not any(chunks):
-            print(f"Warning: No valid content found in {filepath}")
+        # Process chunks into Qdrant points
+        points, num_chunks = process_document_chunks(chunks, filepath)
+        
+        if not points:
+            logger.warning(f"No valid chunks generated from {filepath}")
             return
         
-        # Filter out any empty chunks that might cause issues
-        chunks = [chunk for chunk in chunks if chunk.strip()]
-        if not chunks:
-            print(f"Warning: No valid text chunks found in {filepath}")
-            return
-        
-        # Generate embeddings for the chunks
-        try:
-            embeddings = model.encode(chunks)
-            if len(embeddings) == 0 or (hasattr(embeddings, 'shape') and embeddings.shape[0] == 0):
-                print(f"Warning: No embeddings generated for {filepath}")
-                return
-        except Exception as e:
-            print(f"Error generating embeddings for {filepath}: {str(e)}")
-            return
-        
-        # Get vector size from the first embedding
-        vector_size = len(embeddings[0]) if len(embeddings) > 0 else 1024
-        
-        # Ensure collection exists with correct configuration
-        collection_name = "rag_collection"
-        ensure_collection_exists(collection_name, vector_size)
-        
-        # Create points for Qdrant
-        points = []
-        for i, (emb, chunk) in enumerate(zip(embeddings, chunks)):
-            point = {
-                "id": get_file_id(filepath, i),
-                "vector": emb.tolist(),
-                "payload": {
-                    "source": os.path.basename(filepath),
-                    "chunk_id": i,
-                    "text": chunk,
-                    "full_path": filepath,
-                    "timestamp": int(time.time())
-                }
-            }
-            points.append(point)
-            print(f"Created point {i+1}/{len(chunks)} with vector size {len(emb)}")
-        
-        # First, delete existing chunks for this file if they exist
+        # Delete existing points for this file
         delete_file_from_index(filepath, collection_name)
         
-        # Upload points to Qdrant with retries
+        # Ensure collection exists with the correct vector size
+        vector_size = len(points[0].vector) if points else 1024
+        ensure_collection_exists(collection_name, vector_size)
+        
+        # Process points in chunks to avoid timeouts
         max_retries = 3
-        chunk_size = 100  # Increased from 10 to 100 for better performance
+        chunk_size = 50  # Process points in smaller chunks for reliability
         
-        print(f"Starting to process {len(points)} points in chunks of {chunk_size}")
-        print(f"Vector size: {vector_size}")
-        print(f"Collection name: {collection_name}")
+        logger.info(f"Processing {len(points)} points in chunks of {chunk_size}")
         
-        for attempt in range(max_retries):
-            try:
-                print(f"\n--- Attempt {attempt + 1}/{max_retries} ---")
-                
-                # Process points in chunks
-                for i in range(0, len(points), chunk_size):
-                    chunk_points = points[i:i + chunk_size]
-                    chunk_num = i // chunk_size + 1
-                    total_chunks = (len(points) - 1) // chunk_size + 1
-                    
-                    print(f"\nChunk {chunk_num}/{total_chunks} ({len(chunk_points)} points)")
-                    
-                    try:
-                        # Print first point for debugging
-                        first_point = chunk_points[0]
-                        print(f"First point ID: {first_point['id']}")
-                        print(f"First point vector length: {len(first_point['vector'])}")
-                        
-                        # Try to upsert the chunk
-                        print(f"Upserting chunk {chunk_num}...")
-                        operation_info = client.upsert(
-                            collection_name=collection_name,
-                            points=chunk_points,
-                            wait=True
-                        )
-                        print(f"Successfully upserted chunk {chunk_num}")
-                        
-                        # Verify the points were added
-                        count_result = client.count(
-                            collection_name=collection_name,
-                            count_filter=None
-                        )
-                        print(f"Current total points in collection: {count_result.count}")
-                        
-                    except Exception as chunk_error:
-                        print(f"\n--- ERROR in chunk {chunk_num} ---")
-                        print(f"Error type: {type(chunk_error).__name__}")
-                        print(f"Error details: {str(chunk_error)}")
-                        print("First point in failed chunk:")
-                        print(f"ID: {chunk_points[0]['id']}")
-                        raise  # Re-raise to trigger retry
-                
-                # If we get here, all chunks were processed successfully
-                processed_files += 1
-                total_files = max(total_files, processed_files)
-                last_error = None
-                print(f"✅ Successfully processed {len(points)} chunks from {filepath}")
-                return  # Exit the function on success
-                
-            except Exception as e:
-                last_error = str(e)
-                print(f"❌ Attempt {attempt + 1} failed: {str(e)}")
-                
-                if attempt == max_retries - 1:  # Last attempt
-                    error_msg = f"Failed to index {filepath} after {max_retries} attempts: {str(e)}"
-                    print(error_msg)
-                    last_error = error_msg
-                    break
-                
-                # Wait before retry with exponential backoff
-                wait_time = 2 ** attempt
-                print(f"Waiting {wait_time} seconds before retry...")
-                time.sleep(wait_time)
-        
-        # If we get here, all retries failed
-        if last_error:
-            raise Exception(last_error)
+        for i in range(0, len(points), chunk_size):
+            chunk_points = points[i:i + chunk_size]
             
-        return  # This should never be reached as we either return on success or raise an exception
+            for attempt in range(max_retries):
+                try:
+                    # Upsert the chunk of points
+                    client.upsert(
+                        collection_name=collection_name,
+                        points=chunk_points,
+                        wait=True
+                    )
+                    logger.info(f"Successfully indexed chunk {i//chunk_size + 1}/{(len(points)-1)//chunk_size + 1}")
+                    break
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise
+                    logger.warning(f"Attempt {attempt + 1} failed, retrying: {str(e)}")
+                    time.sleep(1)  # Wait before retry
+        
+        processed_files += 1
+        logger.info(f"Successfully indexed {num_chunks} chunks from {filepath}")
         
     except Exception as e:
-        # Handle any unexpected errors
-        last_error = str(e)
-        print(f"❌ Unexpected error processing {filepath}: {str(e)}")
+        last_error = f"Error processing {filepath}: {str(e)}"
+        logger.error(last_error, exc_info=True)
         raise
-        
     finally:
-        # Always clean up
-        is_indexing = False
         current_file = None
+        is_indexing = False
+                
+        # Process points in chunks to avoid timeouts
+        max_retries = 3
+        chunk_size = 50  # Process points in smaller chunks for reliability
+        
+        logger.info(f"Processing {len(points)} points in chunks of {chunk_size}")
+        
+        for i in range(0, len(points), chunk_size):
+            chunk_points = points[i:i + chunk_size]
+            
+            for attempt in range(max_retries):
+                try:
+                    # Upsert the chunk of points
+                    client.upsert(
+                        collection_name=collection_name,
+                        points=chunk_points,
+                        wait=True
+                    )
+                    logger.info(f"Successfully indexed chunk {i//chunk_size + 1}/{(len(points)-1)//chunk_size + 1}")
+                    break
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise
+                    logger.warning(f"Attempt {attempt + 1} failed, retrying: {str(e)}")
+                    time.sleep(2 ** attempt)  # Exponential backoff
+        
+        processed_files += 1
+        total_files = max(total_files, processed_files)
+        logger.info(f"Successfully indexed {num_chunks} chunks from {filepath}")
 
 class DocumentHandler(FileSystemEventHandler):
+    """Handles file system events for document processing."""
+    
+    # Supported file extensions and their MIME types
+    SUPPORTED_EXTENSIONS = {
+        # Text files
+        '.txt': 'text/plain',
+        '.md': 'text/markdown',
+        
+        # Document files
+        '.pdf': 'application/pdf',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.doc': 'application/msword',
+        
+        # Add more supported formats as needed
+    }
+    
     def on_created(self, event):
+        """Handle file creation events."""
         if event.is_directory:
             return
-        if event.src_path.endswith(('.txt', '.md')):
-            index_document(event.src_path)
+            
+        filepath = event.src_path
+        file_ext = os.path.splitext(filepath)[1].lower()
+        
+        if file_ext in self.SUPPORTED_EXTENSIONS:
+            try:
+                # Check if the file is ready (not being written to)
+                if not self._is_file_ready(filepath):
+                    logger.warning(f"File {filepath} is not ready for processing, will retry")
+                    return
+                    
+                logger.info(f"Detected new file: {filepath}")
+                index_document(filepath)
+                
+            except Exception as e:
+                logger.error(f"Error processing {filepath}: {str(e)}", exc_info=True)
+    
+    def _is_file_ready(self, filepath, max_attempts=5, delay=1):
+        """Check if a file is ready to be processed."""
+        for attempt in range(max_attempts):
+            try:
+                # Try to open the file exclusively
+                with open(filepath, 'rb') as f:
+                    # Read a small chunk to check if the file is accessible
+                    f.read(1024)
+                return True
+            except (IOError, PermissionError) as e:
+                if attempt == max_attempts - 1:
+                    return False
+                time.sleep(delay)
+        return False
 
 def interactive_query_mode():
     """Run an interactive query mode for testing document search"""
