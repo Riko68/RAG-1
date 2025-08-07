@@ -290,16 +290,26 @@ def ensure_collection_exists(collection_name: str, vector_size: int = 1024) -> b
                 # Collection doesn't exist, try to create it
                 logger.info(f"Collection '{collection_name}' not found, attempting to create it (attempt {attempt + 1}/{max_retries})...")
                 try:
+                    # Create collection with minimal required configuration
                     client.create_collection(
                         collection_name=collection_name,
                         vectors_config=VectorParams(
                             size=vector_size,
                             distance=Distance.COSINE
-                        ),
+                        )
+                    )
+                    
+                    # Update collection with optional configurations
+                    client.update_collection(
+                        collection_name=collection_name,
                         optimizers_config=OptimizersConfig(
+                            deleted_threshold=0.2,
+                            vacuum_min_vector_number=1000,
+                            default_segment_number=0,
                             max_segment_size=10000,
                             memmap_threshold=20000,
-                            indexing_threshold=20000
+                            indexing_threshold=20000,
+                            flush_interval_sec=5
                         ),
                         hnsw_config=HnswConfig(
                             m=16,
@@ -307,6 +317,7 @@ def ensure_collection_exists(collection_name: str, vector_size: int = 1024) -> b
                             full_scan_threshold=10000
                         )
                     )
+                    
                     logger.info(f"Successfully created collection '{collection_name}' with vector size {vector_size}")
                     return True
                     
