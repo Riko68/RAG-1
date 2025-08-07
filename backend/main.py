@@ -25,8 +25,8 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from qdrant_client import QdrantClient
 
 # Import RAG service and memory
-from rag_service import RAGService
-from memory import MemoryManager
+from backend.rag_service import RAGService
+from backend.memory import MemoryManager
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)

@@ -10,7 +10,7 @@ from langchain.prompts import PromptTemplate
 import logging
 import os
 
-from .memory import MemoryManager, ConversationMemory
+from backend.memory import MemoryManager, ConversationMemory
 
 logger = logging.getLogger(__name__)
 
