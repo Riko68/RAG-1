@@ -314,6 +314,83 @@ class DocumentProcessor:
             logger.error(f"Error extracting text from PDF {filepath}: {str(e)}", exc_info=True)
             raise
     
+    def _enforce_chunk_size(self, chunk: DocumentChunk) -> List[DocumentChunk]:
+        """Ensure a chunk doesn't exceed the maximum size by splitting it further.
+        
+        Args:
+            chunk: The chunk to potentially split
+            
+        Returns:
+            List of chunks, each within the size limit
+        """
+        if len(chunk.text) <= self.chunk_size:
+            return [chunk]
+            
+        # Split by sentences first
+        doc = self.nlp(chunk.text)
+        sentences = [sent.text for sent in doc.sents]
+        
+        # If no sentences found (shouldn't happen), fall back to character-based split
+        if not sentences:
+            mid = len(chunk.text) // 2
+            return [
+                DocumentChunk(
+                    text=chunk.text[:mid].strip(),
+                    metadata=chunk.metadata.copy()
+                ),
+                DocumentChunk(
+                    text=chunk.text[mid:].strip(),
+                    metadata=chunk.metadata.copy()
+                )
+            ]
+        
+        # Build chunks from sentences
+        chunks = []
+        current_chunk = []
+        current_length = 0
+        
+        for sentence in sentences:
+            sent_length = len(sentence)
+            
+            # If adding this sentence would exceed the chunk size, finalize current chunk
+            if current_length + sent_length > self.chunk_size and current_chunk:
+                chunks.append(DocumentChunk(
+                    text=' '.join(current_chunk).strip(),
+                    metadata=chunk.metadata.copy()
+                ))
+                current_chunk = []
+                current_length = 0
+                
+            current_chunk.append(sentence)
+            current_length += sent_length + 1  # +1 for the space
+            
+        # Add the last chunk if not empty
+        if current_chunk:
+            chunks.append(DocumentChunk(
+                text=' '.join(current_chunk).strip(),
+                metadata=chunk.metadata.copy()
+            ))
+            
+        # If we still have chunks that are too large (should be rare), split them in half
+        final_chunks = []
+        for c in chunks:
+            if len(c.text) > self.chunk_size:
+                mid = len(c.text) // 2
+                final_chunks.extend([
+                    DocumentChunk(
+                        text=c.text[:mid].strip(),
+                        metadata=c.metadata.copy()
+                    ),
+                    DocumentChunk(
+                        text=c.text[mid:].strip(),
+                        metadata=c.metadata.copy()
+                    )
+                ])
+            else:
+                final_chunks.append(c)
+                
+        return final_chunks
+
     def _chunk_text(self, text: str, metadata: Dict[str, Any]) -> List[DocumentChunk]:
         """Split text into semantic chunks with enhanced metadata.
         
@@ -349,20 +426,24 @@ class DocumentProcessor:
             segment_metadata = chunk_metadata.copy()
             segment_metadata['chunk_type'] = segment_type
             
-            # If segment is small, add as is
-            if len(segment) <= self.chunk_size + self.chunk_overlap:
-                chunks.append(DocumentChunk(
-                    text=segment,
-                    metadata=segment_metadata
-                ))
-                continue
-                
-            # Otherwise, split further by paragraphs and sentences
-            sub_chunks = self._split_by_paragraphs_and_sentences(segment, segment_metadata)
-            chunks.extend(sub_chunks)
+            # Create initial chunk
+            chunk = DocumentChunk(
+                text=segment,
+                metadata=segment_metadata
+            )
+            
+            # Ensure chunk size is within limits
+            chunks.extend(self._enforce_chunk_size(chunk))
         
         # Final pass: Merge small chunks where possible
         chunks = self._merge_small_chunks(chunks)
+        
+        # Log chunk statistics
+        chunk_sizes = [len(c.text) for c in chunks]
+        if chunk_sizes:
+            logger.info(f"Chunking complete: {len(chunks)} chunks, "
+                      f"avg size: {sum(chunk_sizes)/len(chunk_sizes):.0f} chars, "
+                      f"min: {min(chunk_sizes)}, max: {max(chunk_sizes)}")
         
         return chunks
         
