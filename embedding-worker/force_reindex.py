@@ -178,22 +178,46 @@ def main():
                 client.delete_collection(collection_name)
                 print(f"Deleted old collection: {collection_name}")
             
-            # Create the final collection with explicit vector config
-            print("Creating final collection...")
-            vector_config = collection_info.config.params.vectors
+            # Create the final collection with explicit vector config and index settings
+            print("Creating final collection with optimized settings...")
+            vector_config = collection_info.config.params.vectors or models.VectorParams(
+                size=1024,  # Default size, adjust if needed
+                distance=models.Distance.COSINE
+            )
+            
             print(f"Vector config: {vector_config}")
             
-            # Ensure we have a valid vector config
-            if not vector_config:
-                print("No vector config found in source collection. Using default config.")
-                vector_config = models.VectorParams(
-                    size=1024,  # Default size, adjust if needed
-                    distance=models.Distance.COSINE
-                )
-                
+            # Create collection with optimized settings
             client.create_collection(
                 collection_name=collection_name,
-                vectors_config=vector_config
+                vectors_config=vector_config,
+                optimizers_config=models.OptimizersConfig(
+                    deleted_threshold=0.2,
+                    vacuum_min_vector_number=1000,
+                    default_segment_number=1,
+                    max_segment_size=10000,
+                    memmap_threshold=0,
+                    indexing_threshold=0,
+                    flush_interval_sec=5,
+                    max_optimization_threads=0
+                ),
+                hnsw_config=models.HnswConfig(
+                    m=16,
+                    ef_construct=100,
+                    full_scan_threshold=10000,
+                    max_indexing_threads=0,
+                    on_disk=False,
+                    payload_m=16
+                )
+            )
+            
+            # Force create index
+            print("Creating vector index...")
+            client.create_payload_index(
+                collection_name=collection_name,
+                field_name="vector",
+                field_schema=models.PayloadSchemaType.KEYWORD,
+                wait=True
             )
             
             # Copy all points from temp collection to the new collection
@@ -249,19 +273,37 @@ def main():
                         print(f"\nError cleaning record {getattr(record, 'id', 'unknown')}: {e}")
                         continue
                 
-                # Insert the cleaned records
+                # Insert the cleaned records with explicit wait for indexing
                 if clean_records:
                     try:
-                        client.upsert(
+                        # Upsert with explicit wait for indexing
+                        operation_response = client.upsert(
                             collection_name=collection_name,
                             points=clean_records,
-                            wait=True
+                            wait=False  # Don't wait here, we'll handle it manually
                         )
+                        
+                        # Wait for the operation to complete
+                        client.wait_for_collection_records_count(
+                            collection_name=collection_name,
+                            count=total_copied + len(clean_records),
+                            exact=True
+                        )
+                        
+                        # Force index update
+                        client.update_collection(
+                            collection_name=collection_name,
+                            optimizer_config=models.OptimizersConfigDiff(
+                                indexing_threshold=0,
+                                flush_interval_sec=1
+                            )
+                        )
+                        
                         total_copied += len(clean_records)
                         print(f"\rCopied {total_copied} points (batch of {len(clean_records)})...", end="", flush=True)
                         
-                        # Force a small delay to prevent overwhelming the server
-                        time.sleep(0.1)
+                        # Small delay to prevent overwhelming
+                        time.sleep(0.2)
                         
                     except Exception as e:
                         print(f"\nError during upsert: {e}")
