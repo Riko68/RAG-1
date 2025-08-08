@@ -172,21 +172,37 @@ def main():
             print("Copying points to final collection...")
             offset = None
             total_copied = 0
+            max_points = 300  # Safety limit - we expect around 267 points
+            batch_size = 20   # Smaller batch size for better progress tracking
             
-            while True:
+            while total_copied < max_points:
                 # Fetch a batch of points from temp collection
-                records, offset = client.scroll(
-                    collection_name=temp_collection,
-                    limit=50,
-                    offset=offset,
-                    with_vectors=True,
-                    with_payload=True
-                )
+                try:
+                    records, offset = client.scroll(
+                        collection_name=temp_collection,
+                        limit=batch_size,
+                        offset=offset,
+                        with_vectors=True,
+                        with_payload=True,
+                        scroll_filter=models.Filter(
+                            must_not=[
+                                # This helps prevent infinite loops with some Qdrant versions
+                                models.FieldCondition(
+                                    key="id",
+                                    match=models.MatchAny(any=[0])
+                                )
+                            ]
+                        )
+                    )
+                except Exception as e:
+                    print(f"\nError during scroll: {e}")
+                    break
                 
                 if not records:
+                    print("\nNo more records to copy.")
                     break
                     
-                # Clean and insert the records
+                # Clean the records
                 clean_records = []
                 for record in records:
                     try:
@@ -197,18 +213,38 @@ def main():
                         }
                         clean_records.append(clean_record)
                     except Exception as e:
-                        print(f"Error cleaning record {getattr(record, 'id', 'unknown')}: {e}")
+                        print(f"\nError cleaning record {getattr(record, 'id', 'unknown')}: {e}")
                         continue
                 
                 # Insert the cleaned records
                 if clean_records:
-                    client.upsert(
-                        collection_name=collection_name,
-                        points=clean_records,
-                        wait=True
-                    )
-                    total_copied += len(clean_records)
-                    print(f"\rCopied {total_copied} points...", end="", flush=True)
+                    try:
+                        client.upsert(
+                            collection_name=collection_name,
+                            points=clean_records,
+                            wait=True
+                        )
+                        total_copied += len(clean_records)
+                        print(f"\rCopied {total_copied} points (batch of {len(clean_records)})...", end="", flush=True)
+                        
+                        # Force a small delay to prevent overwhelming the server
+                        time.sleep(0.1)
+                        
+                    except Exception as e:
+                        print(f"\nError during upsert: {e}")
+                        print(f"Batch size was: {len(clean_records)}")
+                        if clean_records:
+                            print(f"First record ID: {clean_records[0]['id']}")
+                        break
+                
+                # If we didn't get a full batch, we're done
+                if len(records) < batch_size:
+                    break
+                
+                # Safety check - if we've copied more than expected, something might be wrong
+                if total_copied > max_points:
+                    print(f"\nWarning: Exceeded expected point count ({max_points}). Stopping to prevent infinite loop.")
+                    break
             
             print(f"\nSuccessfully copied {total_copied} points to {collection_name}")
             
