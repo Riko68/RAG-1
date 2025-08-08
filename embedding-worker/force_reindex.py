@@ -17,9 +17,14 @@ try:
     client.update_collection(
         collection_name=collection_name,
         optimizer_config=models.OptimizersConfig(
-            indexing_threshold=0,  # Force indexing
+            deleted_threshold=0.2,
+            vacuum_min_vector_number=1000,
+            default_segment_number=1,
+            max_segment_size=10000,
             memmap_threshold=0,    # Force all vectors to be in memory
-            default_segment_number=1
+            indexing_threshold=0,  # Force indexing
+            flush_interval_sec=5,
+            max_optimization_threads=0
         )
     )
     print("\nReindexing triggered. This might take a while...")
@@ -69,8 +74,14 @@ except Exception as e:
             collection_name=temp_name,
             vectors_config=collection_info.config.params.vectors,
             optimizers_config=models.OptimizersConfig(
-                indexing_threshold=0,
-                memmap_threshold=0
+                deleted_threshold=0.2,
+                vacuum_min_vector_number=1000,
+                default_segment_number=1,
+                max_segment_size=10000,
+                memmap_threshold=0,    # Force all vectors to be in memory
+                indexing_threshold=0,  # Force indexing
+                flush_interval_sec=5,
+                max_optimization_threads=0
             )
         )
         
