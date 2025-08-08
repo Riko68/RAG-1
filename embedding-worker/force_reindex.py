@@ -42,6 +42,35 @@ def get_collection_stats(collection_name: str):
         print(f"Error getting collection info: {e}")
         return None
 
+def verify_vectors(collection_name: str, point_id: int):
+    """Verify vectors are properly stored for a specific point"""
+    try:
+        # Get point directly
+        point = client.retrieve(
+            collection_name=collection_name,
+            ids=[point_id],
+            with_vectors=True
+        )[0]
+        
+        print(f"\nVerifying vector storage for point {point_id}:")
+        print(f"Vector present: {point.vector is not None}")
+        if point.vector:
+            print(f"Vector dimension: {len(point.vector)}")
+            print(f"First 5 values: {point.vector[:5]}")
+            
+        # Try a similarity search
+        results = client.search(
+            collection_name=collection_name,
+            query_vector=point.vector,
+            limit=2
+        )
+        print(f"\nSimilarity search results:")
+        for r in results:
+            print(f"ID: {r.id}, Score: {r.score}")
+            
+    except Exception as e:
+        print(f"Error verifying vectors: {e}")
+
 def main():
     print("1. Getting collection info...")
     collection_info = get_collection_stats(collection_name)
@@ -93,32 +122,37 @@ def main():
         vector_config = models.VectorParams(
             size=1024,
             distance=models.Distance.COSINE,
-            on_disk=False  # Add this
+            on_disk=False,
+            hnsw_config=models.HnswConfig(
+                m=16,
+                ef_construct=100,
+                full_scan_threshold=10000
+            ),
+            quantization_config=None,
+            # Force vectors to be stored
+            init_from=models.InitFrom(
+                collection=None,
+                vector=True
+            )
         )
         
         client.create_collection(
             collection_name=temp_collection,
             vectors_config=vector_config,
-            hnsw_config=models.HnswConfig(
-                m=16,
-                ef_construct=100,
-                full_scan_threshold=10000
-            )
+            timeout=60,
+            wait=True  # Make sure collection is ready before proceeding
         )
         
-        # Update collection settings
+        # After creation, force an optimization
         client.update_collection(
             collection_name=temp_collection,
             optimizers_config=models.OptimizersConfig(
-                deleted_threshold=0.2,
-                vacuum_min_vector_number=0,
-                default_segment_number=1,
-                max_segment_size=10000,
+                indexing_threshold=0,  # Force immediate indexing
                 memmap_threshold=0,
-                indexing_threshold=0,
-                flush_interval_sec=5,
-                max_optimization_threads=0
-            )
+                flush_interval_sec=1
+            ),
+            timeout=60,
+            wait=True
         )
         print(f"Created new collection: {temp_collection}")
     except Exception as e:
@@ -328,6 +362,10 @@ def main():
         print(f"\n❌ Error during reindexing: {e}")
         print(f"Temporary collection '{temp_collection}' may need to be cleaned up.")
         raise
+
+    # After creating the collection and inserting points:
+    print("\nVerifying vector storage...")
+    verify_vectors(collection_name, 43506)  # Use one of your known point IDs
 
 if __name__ == "__main__":
     main()
