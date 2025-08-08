@@ -94,22 +94,25 @@ def main():
                 limit=batch_size,
                 offset=offset,
                 with_vectors=True,
-                with_payload=True,
-                scroll_filter=models.Filter(
-                    must_not=[  # Skip any points that might cause issues
-                        {"has_id": []}  # This is just a placeholder filter
-                    ]
-                )
+                with_payload=True
             )
 
             if not records:
                 break
 
-            # Insert batch into new collection
+            # Clean and insert batch into new collection
             if records:
+                # Clean the records by removing extra fields
+                clean_records = []
+                for record in records:
+                    # Convert to dict and remove unwanted fields
+                    record_dict = record.dict(exclude={'order_value', 'shard_key'}, exclude_none=True)
+                    clean_records.append(record_dict)
+                
+                # Use the clean records for upsert
                 client.upsert(
                     collection_name=temp_collection,
-                    points=records,
+                    points=clean_records,
                     wait=True
                 )
                 total_processed += len(records)
