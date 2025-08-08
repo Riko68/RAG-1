@@ -63,8 +63,8 @@ def main():
     print("\n3. Creating new collection...")
     try:
         # Delete temp collection if it exists
-        collections = client.get_collections()
-        if any(c.name == temp_collection for c in collections.collections):
+        collections = client.get_collections().collections
+        if any(c.name == temp_collection for c in collections):
             client.delete_collection(temp_collection)
         
         # Create new collection with the same config
@@ -97,7 +97,7 @@ def main():
     offset = None
     total_processed = 0
     batch_size = 50
-    max_points = count_result.count  # Don't process more points than we counted
+    max_points = count_result.count
 
     try:
         while total_processed < max_points:
@@ -155,35 +155,57 @@ def main():
         # Swap collections
         print("\n6. Swapping collections...")
         try:
-            # First remove any existing alias
-            aliases = client.get_collections()
-            for alias in aliases.collections:
-                if alias.name == collection_name:
-                    client.update_collection_alias(
-                        change_alias_operations=[
-                            models.DeleteAliasOperation(
-                                delete_alias=models.DeleteAlias(alias_name=collection_name)
-                            )
-                        ]
-                    )
-                    break
+            # First delete the old collection if it exists
+            collections = client.get_collections().collections
+            if any(c.name == collection_name for c in collections):
+                client.delete_collection(collection_name)
+                print(f"Deleted old collection: {collection_name}")
             
-            # Then delete the old collection
-            client.delete_collection(collection_name)
-        except Exception as e:
-            print(f"Note: Could not delete old collection: {e}")
-
-        # Create new alias
-        client.update_collection_alias(
-            change_alias_operations=[
-                models.CreateAliasOperation(
-                    create_alias=models.CreateAlias(
-                        collection_name=temp_collection,
-                        alias_name=collection_name
-                    )
+            # Create the final collection
+            print("Creating final collection...")
+            client.create_collection(
+                collection_name=collection_name,
+                vectors_config=collection_info.config.params.vectors
+            )
+            
+            # Copy all points from temp collection to the new collection
+            print("Copying points to final collection...")
+            offset = None
+            total_copied = 0
+            
+            while True:
+                # Fetch a batch of points from temp collection
+                records, offset = client.scroll(
+                    collection_name=temp_collection,
+                    limit=50,
+                    offset=offset,
+                    with_vectors=True,
+                    with_payload=True
                 )
-            ]
-        )
+                
+                if not records:
+                    break
+                    
+                # Insert into the new collection
+                if records:
+                    client.upsert(
+                        collection_name=collection_name,
+                        points=records,
+                        wait=True
+                    )
+                    total_copied += len(records)
+                    print(f"\rCopied {total_copied} points...", end="", flush=True)
+            
+            print(f"\nSuccessfully copied {total_copied} points to {collection_name}")
+            
+            # Clean up the temp collection
+            print(f"Cleaning up temporary collection: {temp_collection}")
+            client.delete_collection(temp_collection)
+            
+        except Exception as e:
+            print(f"Error during collection swap: {e}")
+            print(f"Temporary collection '{temp_collection}' may need to be cleaned up manually.")
+            raise
 
         print("\n✅ Reindexing completed successfully!")
         final_info = get_collection_stats(collection_name)
