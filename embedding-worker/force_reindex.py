@@ -1,114 +1,120 @@
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+import time
 
-client = QdrantClient(host='qdrant', port=6333)
+client = QdrantClient(host='qdrant', port=6333, timeout=60.0)  # Increased timeout
 collection_name = 'rag_collection'
+temp_collection = f"{collection_name}_temp_{int(time.time())}"
 
-# Get current collection info
-collection_info = client.get_collection(collection_name)
-print("Before reindexing:")
-print("Vectors count:", collection_info.vectors_count)
-print("Indexed vectors count:", collection_info.indexed_vectors_count)
-print("Points count:", collection_info.points_count)
-
-# Force reindex by updating the collection
+print("1. Getting collection info...")
 try:
-    # This will trigger a reindex
-    client.update_collection(
-        collection_name=collection_name,
-        optimizer_config=models.OptimizersConfig(
+    collection_info = client.get_collection(collection_name)
+    print(f"Current collection: {collection_name}")
+    print(f"Vectors: {collection_info.vectors_count}, Indexed: {collection_info.indexed_vectors_count}, Points: {collection_info.points_count}")
+    
+    print("\n2. Fetching all points...")
+    all_points = []
+    offset = None
+    while True:
+        points, offset = client.scroll(
+            collection_name=collection_name,
+            limit=100,
+            offset=offset,
+            with_vectors=True,
+            with_payload=True
+        )
+        if not points:
+            break
+        all_points.extend(points)
+        print(f"\rFetched {len(all_points)} points...", end="")
+    
+    if not all_points:
+        print("\nNo points found in the collection!")
+        exit(1)
+    
+    print(f"\n\n3. Creating new collection: {temp_collection}")
+    vector_config = collection_info.config.params.vectors
+    client.recreate_collection(
+        collection_name=temp_collection,
+        vectors_config=vector_config,
+        optimizers_config=models.OptimizersConfig(
             deleted_threshold=0.2,
-            vacuum_min_vector_number=1000,
+            vacuum_min_vector_number=0,  # Changed from 1000 to 0
             default_segment_number=1,
             max_segment_size=10000,
-            memmap_threshold=0,    # Force all vectors to be in memory
-            indexing_threshold=0,  # Force indexing
+            memmap_threshold=0,
+            indexing_threshold=0,
             flush_interval_sec=5,
             max_optimization_threads=0
         )
     )
-    print("\nReindexing triggered. This might take a while...")
     
-    # Wait a bit for reindexing to complete
-    import time
-    time.sleep(5)  # Give it some time to start reindexing
+    print("4. Inserting points in batches of 50...")
+    batch_size = 50
+    for i in range(0, len(all_points), batch_size):
+        batch = all_points[i:i + batch_size]
+        client.upsert(
+            collection_name=temp_collection,
+            points=batch,
+            wait=True
+        )
+        print(f"\rInserted {min(i + len(batch), len(all_points))}/{len(all_points)} points...", end="")
     
-    # Check status
-    while True:
-        info = client.get_collection(collection_name)
-        print(f"\rVectors: {info.vectors_count}, Indexed: {info.indexed_vectors_count}, Points: {info.points_count}", end="")
-        if info.indexed_vectors_count == info.points_count:
-            break
-        time.sleep(1)
+    print("\n\n5. Verifying new collection...")
+    time.sleep(2)  # Give it a moment to process
+    new_info = client.get_collection(temp_collection)
+    print(f"New collection status: {new_info.status}")
+    print(f"Vectors: {new_info.vectors_count}, Indexed: {new_info.indexed_vectors_count}, Points: {new_info.points_count}")
     
-    print("\n\nReindexing completed successfully!")
-    print("After reindexing:")
-    print("Vectors count:", info.vectors_count)
-    print("Indexed vectors count:", info.indexed_vectors_count)
-    print("Points count:", info.points_count)
-
-except Exception as e:
-    print(f"\nError during reindexing: {str(e)}")
-    print("Trying alternative reindexing method...")
-    
-    # Alternative method: create a new collection and reinsert all points
+    print("\n6. Creating alias...")
     try:
-        # Get all points
-        points = []
-        next_offset = None
-        while True:
-            records, next_offset = client.scroll(
-                collection_name=collection_name,
-                limit=100,
-                offset=next_offset,
-                with_vectors=True,
-                with_payload=True
+        client.delete_collection(collection_name)
+    except Exception as e:
+        print(f"Could not delete old collection (may not exist): {e}")
+    
+    client.update_collection_alias(
+        change_alias_operations=[
+            models.CreateAliasOperation(
+                create_alias=models.CreateAlias(
+                    collection_name=temp_collection,
+                    alias_name=collection_name
+                )
             )
-            if not records:
-                break
-            points.extend(records)
-        
-        # Create new collection
-        temp_name = f"{collection_name}_new"
-        client.recreate_collection(
-            collection_name=temp_name,
-            vectors_config=collection_info.config.params.vectors,
-            optimizers_config=models.OptimizersConfig(
+        ]
+    )
+    
+    print("\n7. Final check...")
+    final_info = client.get_collection(collection_name)
+    print(f"Final collection status: {final_info.status}")
+    print(f"Vectors: {final_info.vectors_count}, Indexed: {final_info.indexed_vectors_count}, Points: {final_info.points_count}")
+    
+    if final_info.indexed_vectors_count == final_info.points_count:
+        print("\n✅ Success! Collection has been reindexed.")
+    else:
+        print("\n⚠️  Warning: Not all vectors are indexed. Trying to force refresh...")
+        client.update_collection(
+            collection_name=collection_name,
+            optimizer_config=models.OptimizersConfig(
                 deleted_threshold=0.2,
-                vacuum_min_vector_number=1000,
+                vacuum_min_vector_number=0,
                 default_segment_number=1,
                 max_segment_size=10000,
-                memmap_threshold=0,    # Force all vectors to be in memory
-                indexing_threshold=0,  # Force indexing
+                memmap_threshold=0,
+                indexing_threshold=0,
                 flush_interval_sec=5,
                 max_optimization_threads=0
             )
         )
-        
-        # Insert points in batches
-        batch_size = 50
-        for i in range(0, len(points), batch_size):
-            batch = points[i:i+batch_size]
-            client.upsert(
-                collection_name=temp_name,
-                points=batch
-            )
-        
-        # Swap collections
-        client.delete_collection(collection_name)
-        client.update_collection_alias(
-            change_alias_operations=[
-                models.CreateAliasOperation(
-                    create_alias=models.CreateAlias(
-                        collection_name=temp_name,
-                        alias_name=collection_name
-                    )
-                )
-            ]
-        )
-        
-        print("\nSuccessfully reindexed collection by recreating it!")
-        
-    except Exception as e2:
-        print(f"Alternative reindexing also failed: {str(e2)}")
-        print("Please check Qdrant logs for more details.")
+        time.sleep(2)
+        final_check = client.get_collection(collection_name)
+        print(f"After refresh - Vectors: {final_check.vectors_count}, Indexed: {final_check.indexed_vectors_count}, Points: {final_check.points_count}")
+
+except Exception as e:
+    print(f"\n❌ Error: {str(e)}")
+    print("\nAttempting to clean up...")
+    try:
+        client.delete_collection(temp_collection)
+        print(f"Deleted temporary collection: {temp_collection}")
+    except:
+        pass
+    raise
