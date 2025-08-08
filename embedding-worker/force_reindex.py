@@ -150,17 +150,17 @@ def main():
                 m=16,
                 ef_construct=100,
                 full_scan_threshold=10000
-            ),
-            # Remove the init_from parameter as it's causing validation errors
+            )
         )
         
         client.create_collection(
             collection_name=temp_collection,
             vectors_config=vector_config,
-            force_recreate=True,  # Add this to ensure clean creation
-            timeout=60,
-            wait=True  # Make sure collection is ready before proceeding
+            timeout=60
         )
+        
+        # Add a small delay to ensure collection is ready
+        time.sleep(2)
         
         # After creation, force an optimization
         client.update_collection(
@@ -170,8 +170,7 @@ def main():
                 memmap_threshold=0,
                 flush_interval_sec=1
             ),
-            timeout=60,
-            wait=True
+            timeout=60
         )
         print(f"Created new collection: {temp_collection}")
     except Exception as e:
@@ -389,6 +388,18 @@ def main():
     # Add this after collection creation
     print("\nVerifying collection configuration...")
     verify_collection(temp_collection)
+
+    # Add after collection creation:
+    try:
+        # Verify collection was created properly
+        collection_info = client.get_collection(temp_collection)
+        print(f"\nVerifying new collection:")
+        print(f"Status: {collection_info.status}")
+        print(f"Vector size: {collection_info.config.params.vectors.size}")
+        print(f"Distance: {collection_info.config.params.vectors.distance}")
+    except Exception as e:
+        print(f"Error verifying collection creation: {e}")
+        raise
 
 if __name__ == "__main__":
     main()
