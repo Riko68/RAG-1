@@ -71,6 +71,29 @@ def verify_vectors(collection_name: str, point_id: int):
     except Exception as e:
         print(f"Error verifying vectors: {e}")
 
+# Add this after collection creation:
+def verify_collection(collection_name: str):
+    """Verify collection configuration and indexing status"""
+    try:
+        info = client.get_collection(collection_name)
+        config = info.config
+        print("\nCollection verification:")
+        print(f"Vector size: {config.params.vectors.size}")
+        print(f"Distance: {config.params.vectors.distance}")
+        print(f"On disk: {config.params.vectors.on_disk}")
+        print(f"HNSW config: {config.params.vectors.hnsw_config}")
+        print(f"Indexing status: {info.status}")
+        
+        # Try to get collection telemetry
+        telemetry = client.get_collection_cluster_info(collection_name)
+        print(f"\nCluster info:")
+        print(f"Collection status: {telemetry.status}")
+        print(f"Optimizing: {telemetry.optimizing}")
+        print(f"Failing: {telemetry.failing}")
+        
+    except Exception as e:
+        print(f"Error verifying collection: {e}")
+
 def main():
     print("1. Getting collection info...")
     collection_info = get_collection_stats(collection_name)
@@ -128,17 +151,13 @@ def main():
                 ef_construct=100,
                 full_scan_threshold=10000
             ),
-            quantization_config=None,
-            # Force vectors to be stored
-            init_from=models.InitFrom(
-                collection=None,
-                vector=True
-            )
+            # Remove the init_from parameter as it's causing validation errors
         )
         
         client.create_collection(
             collection_name=temp_collection,
             vectors_config=vector_config,
+            force_recreate=True,  # Add this to ensure clean creation
             timeout=60,
             wait=True  # Make sure collection is ready before proceeding
         )
@@ -366,6 +385,10 @@ def main():
     # After creating the collection and inserting points:
     print("\nVerifying vector storage...")
     verify_vectors(collection_name, 43506)  # Use one of your known point IDs
+
+    # Add this after collection creation
+    print("\nVerifying collection configuration...")
+    verify_collection(temp_collection)
 
 if __name__ == "__main__":
     main()
