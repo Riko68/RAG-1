@@ -15,6 +15,23 @@ def get_collection_stats(collection_name: str):
         print(f"Points: {info.points_count}")
         print(f"Vectors: {info.vectors_count}")
         print(f"Indexed Vectors: {info.indexed_vectors_count}")
+        
+        # Get sample points to check for vectors
+        try:
+            records, _ = client.scroll(
+                collection_name=collection_name,
+                limit=1,
+                with_vectors=True,
+                with_payload=False
+            )
+            if records:
+                has_vectors = hasattr(records[0], 'vector') and records[0].vector is not None
+                print(f"Sample point has vector: {has_vectors}")
+                if has_vectors:
+                    print(f"Vector dimension: {len(records[0].vector) if has_vectors else 'N/A'}")
+        except Exception as e:
+            print(f"Could not check sample vectors: {e}")
+            
         return info
     except Exception as e:
         print(f"Error getting collection info: {e}")
@@ -161,11 +178,22 @@ def main():
                 client.delete_collection(collection_name)
                 print(f"Deleted old collection: {collection_name}")
             
-            # Create the final collection
+            # Create the final collection with explicit vector config
             print("Creating final collection...")
+            vector_config = collection_info.config.params.vectors
+            print(f"Vector config: {vector_config}")
+            
+            # Ensure we have a valid vector config
+            if not vector_config:
+                print("No vector config found in source collection. Using default config.")
+                vector_config = models.VectorParams(
+                    size=1024,  # Default size, adjust if needed
+                    distance=models.Distance.COSINE
+                )
+                
             client.create_collection(
                 collection_name=collection_name,
-                vectors_config=collection_info.config.params.vectors
+                vectors_config=vector_config
             )
             
             # Copy all points from temp collection to the new collection
@@ -202,10 +230,15 @@ def main():
                     print("\nNo more records to copy.")
                     break
                     
-                # Clean the records
+                # Clean the records and verify vectors
                 clean_records = []
                 for record in records:
                     try:
+                        # Verify the record has a vector
+                        if not hasattr(record, 'vector') or record.vector is None:
+                            print(f"\nWarning: Record {record.id} has no vector!")
+                            continue
+                            
                         clean_record = {
                             'id': record.id,
                             'vector': record.vector,
