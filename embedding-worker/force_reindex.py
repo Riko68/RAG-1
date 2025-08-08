@@ -15,6 +15,7 @@ def get_collection_stats(collection_name: str):
         print(f"Points: {info.points_count}")
         print(f"Vectors: {info.vectors_count}")
         print(f"Indexed Vectors: {info.indexed_vectors_count}")
+        print(f"Vector config: {info.config.params.vectors}")
         
         # Get sample points to check for vectors
         try:
@@ -22,13 +23,17 @@ def get_collection_stats(collection_name: str):
                 collection_name=collection_name,
                 limit=1,
                 with_vectors=True,
-                with_payload=False
+                with_payload=True
             )
             if records:
-                has_vectors = hasattr(records[0], 'vector') and records[0].vector is not None
-                print(f"Sample point has vector: {has_vectors}")
-                if has_vectors:
-                    print(f"Vector dimension: {len(records[0].vector) if has_vectors else 'N/A'}")
+                point = records[0]
+                print("\nSample point details:")
+                print(f"Has vector attribute: {hasattr(point, 'vector')}")
+                print(f"Vector is not None: {point.vector is not None}")
+                if hasattr(point, 'vector') and point.vector is not None:
+                    print(f"Vector dimension: {len(point.vector)}")
+                    print(f"Vector type: {type(point.vector)}")
+                    print(f"First few vector values: {point.vector[:5]}")
         except Exception as e:
             print(f"Could not check sample vectors: {e}")
             
@@ -85,9 +90,20 @@ def main():
             client.delete_collection(temp_collection)
         
         # Create new collection with the same config
+        vector_config = models.VectorParams(
+            size=1024,
+            distance=models.Distance.COSINE,
+            on_disk=False  # Add this
+        )
+        
         client.create_collection(
             collection_name=temp_collection,
-            vectors_config=collection_info.config.params.vectors
+            vectors_config=vector_config,
+            hnsw_config=models.HnswConfig(
+                m=16,
+                ef_construct=100,
+                full_scan_threshold=10000
+            )
         )
         
         # Update collection settings
@@ -148,6 +164,15 @@ def main():
             # Insert batch into new collection
             if clean_records:
                 try:
+                    # Debug first point before upserting
+                    if clean_records:
+                        first_point = clean_records[0]
+                        print("\nDebug first point:")
+                        print(f"ID: {first_point['id']}")
+                        print(f"Vector type: {type(first_point['vector'])}")
+                        print(f"Vector length: {len(first_point['vector'])}")
+                        print(f"First few vector values: {first_point['vector'][:5]}")
+        
                     client.upsert(
                         collection_name=temp_collection,
                         points=clean_records,
