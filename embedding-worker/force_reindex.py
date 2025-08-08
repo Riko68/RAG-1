@@ -186,14 +186,28 @@ def main():
                 if not records:
                     break
                     
-                # Insert into the new collection
-                if records:
+                # Clean and insert the records
+                clean_records = []
+                for record in records:
+                    try:
+                        clean_record = {
+                            'id': record.id,
+                            'vector': record.vector,
+                            'payload': record.payload
+                        }
+                        clean_records.append(clean_record)
+                    except Exception as e:
+                        print(f"Error cleaning record {getattr(record, 'id', 'unknown')}: {e}")
+                        continue
+                
+                # Insert the cleaned records
+                if clean_records:
                     client.upsert(
                         collection_name=collection_name,
-                        points=records,
+                        points=clean_records,
                         wait=True
                     )
-                    total_copied += len(records)
+                    total_copied += len(clean_records)
                     print(f"\rCopied {total_copied} points...", end="", flush=True)
             
             print(f"\nSuccessfully copied {total_copied} points to {collection_name}")
